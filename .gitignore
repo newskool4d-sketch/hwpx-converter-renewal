@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+build/
+out/
+
+# Local packaging duplicates and temporary archives
+dist/*.zip
+handoff.md
+
+# PyInstaller local cache artifacts
+*.toc
+*.pkg
