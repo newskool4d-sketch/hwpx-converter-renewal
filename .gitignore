@@ -6,6 +6,7 @@ out/
 
 # Local packaging duplicates and temporary archives
 dist/*.zip
+dist/*.exe
 handoff.md
 
 # PyInstaller local cache artifacts
