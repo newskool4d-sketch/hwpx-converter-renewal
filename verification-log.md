@@ -79,3 +79,28 @@
 - Rebuilt `dist/anyway_to_hwpx_gui.exe` with hidden imports for `pdfplumber`, `fitz`, and `pymupdf`.
 - Output: `dist/anyway_to_hwpx_gui.exe` (88,463,793 bytes).
 - PyInstaller warnings still list optional `pypdf` and PyMuPDF optional modules; text PDF extraction is covered by bundled `pdfplumber`/`PyMuPDF`, while scanned image PDFs still need OCR.
+
+## 2026-05-23 Reliability improvement pass
+
+- Added `requirements.txt` for reproducible development and rebuild setup.
+- Added `--preflight` to check HWP COM startup before conversion.
+- Moved HWP COM startup into `create_hwp_object()` so CLI and GUI share the same startup and error-message path.
+- Changed HWP COM preflight to run in a child worker process with a 45-second timeout, preventing raw tracebacks on COM startup failure.
+- Added `--kordoc-home` and `KORDOC_HOME` / `KORDOC_AI_HOME` support for configurable scanned-PDF OCR paths.
+- Added COM-free unit tests for Markdown/plain-text parsing, output path collision handling, table width/height heuristics, and OCR path resolution.
+- Improved GUI failure dialog so the first failed target and error message are visible without digging through the log.
+- Updated README with user/developer sections, preflight usage, OCR configuration, setup, tests, and build commands.
+- `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py`: pass.
+- `python -m unittest discover -s tests`: pass, 7 tests.
+- `python anyway_to_hwpx_com.py --help`: pass, includes `--preflight` and `--kordoc-home`.
+- `python anyway_to_hwpx_com.py --list-formats`: pass.
+- `python anyway_to_hwpx_com.py --preflight`: exits cleanly with `[FAIL] HWP COM preflight timed out after 45 seconds.` in the current environment. The temporary `Hwp` process exited shortly afterward.
+
+## 2026-05-23 GUI EXE rebuild after reliability pass
+
+- Rebuilt `dist/anyway_to_hwpx_gui.exe` with PyInstaller 6.20.0 and Python 3.14.3.
+- Build command: `python -m PyInstaller --onefile --windowed --name anyway_to_hwpx_gui --clean --hidden-import=pdfplumber --hidden-import=fitz --hidden-import=pymupdf .\anyway_to_hwpx_gui.py`
+- Output: `dist/anyway_to_hwpx_gui.exe` (90,804,771 bytes).
+- PyInstaller warning file reviewed at `build/anyway_to_hwpx_gui/warn-anyway_to_hwpx_gui.txt`; listed modules are mostly optional, platform-specific, or conditional imports from bundled dependencies.
+- `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py`: pass.
+- `python -m unittest discover -s tests`: pass, 7 tests.

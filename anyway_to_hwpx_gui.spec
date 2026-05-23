@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\anyway_to_hwpx_gui.py'],
+    ['anyway_to_hwpx_gui.py'],
     pathex=[],
     binaries=[],
     datas=[],

@@ -13,15 +13,13 @@ import sys
 import time
 import unicodedata
 
-import win32com.client
-
 SUPPORTED_EXTENSIONS = {'.md', '.txt', '.docx', '.html', '.htm', '.csv', '.xlsx', '.pdf'}
 OPTIONAL_DEPENDENCIES = {
     '.docx': 'python-docx',
     '.html': 'beautifulsoup4',
     '.htm': 'beautifulsoup4',
     '.xlsx': 'openpyxl',
-    '.pdf': 'kordoc, pdfplumber, PyMuPDF 또는 pypdf',
+    '.pdf': 'KORDOC_HOME 환경변수 또는 --kordoc-home, pdfplumber, PyMuPDF 또는 pypdf',
 }
 
 
@@ -43,6 +41,30 @@ def require_file(path):
         raise FileNotFoundError(f'입력 파일을 찾을 수 없음: {path}')
     if not path.is_file():
         raise ValueError(f'입력 경로가 파일이 아님: {path}')
+
+
+def resolve_kordoc_dir(explicit_path=None):
+    candidates = []
+    if explicit_path:
+        candidates.append(Path(explicit_path))
+    for env_name in ('KORDOC_HOME', 'KORDOC_AI_HOME'):
+        value = os.environ.get(env_name)
+        if value:
+            candidates.append(Path(value))
+    candidates.append(Path(r'C:/Users/홍주형/kordoc-ai'))
+
+    for candidate in candidates:
+        expanded = candidate.expanduser()
+        if expanded.exists():
+            return expanded.resolve()
+    return None
+
+
+def _kordoc_commands(kordoc_dir, path):
+    return [
+        ['python', str(kordoc_dir / 'main.py'), str(path)],
+        ['python', '-m', 'kordoc', str(path)],
+    ]
 
 
 # ─── Markdown 파서 ─────────────────────────────────────────────────────────────
@@ -307,15 +329,11 @@ def parse_xlsx(path):
         wb.close()
 
 
-def try_kordoc_pdf_text(path):
-    kordoc_dir = Path(r'C:/Users/홍주형/kordoc-ai')
-    if not kordoc_dir.exists():
+def try_kordoc_pdf_text(path, kordoc_home=None):
+    kordoc_dir = resolve_kordoc_dir(kordoc_home)
+    if kordoc_dir is None:
         return None
-    candidates = [
-        ['python', str(kordoc_dir / 'main.py'), str(path)],
-        ['python', '-m', 'kordoc', str(path)],
-    ]
-    for cmd in candidates:
+    for cmd in _kordoc_commands(kordoc_dir, path):
         try:
             result = subprocess.run(
                 cmd,
@@ -389,8 +407,8 @@ def extract_pdf_text_fallback(path):
     raise RuntimeError(f'PDF 텍스트 추출 실패: {detail}')
 
 
-def parse_pdf(path):
-    text = try_kordoc_pdf_text(path)
+def parse_pdf(path, kordoc_home=None):
+    text = try_kordoc_pdf_text(path, kordoc_home=kordoc_home)
     if text is None:
         text = extract_pdf_text_fallback(path)
     if not text.strip():
@@ -508,7 +526,7 @@ def parse_docx(docx_path):
 
 # ─── 확장자 자동 감지 ──────────────────────────────────────────────────────────
 
-def detect_and_parse(file_path):
+def detect_and_parse(file_path, kordoc_home=None):
     path = as_path(file_path)
     require_file(path)
     ext = path.suffix.lower()
@@ -528,11 +546,75 @@ def detect_and_parse(file_path):
     if ext == '.xlsx':
         return parse_xlsx(path)
     if ext == '.pdf':
-        return parse_pdf(path)
+        return parse_pdf(path, kordoc_home=kordoc_home)
     raise ValueError(f'지원하지 않는 형식: {ext}')
 
 
 # ─── HWP COM 헬퍼 ─────────────────────────────────────────────────────────────
+
+def format_hwp_startup_error(exc):
+    return (
+        'HWP COM 자동화 시작 실패. Hancom Office HWP 설치, COM 등록, '
+        'FilePathCheckDLL 보안 모듈 등록 상태를 확인하세요. '
+        f'원인: {exc}'
+    )
+
+
+def create_hwp_object(visible=True):
+    try:
+        import win32com.client
+    except ImportError as exc:
+        raise RuntimeError('HWP COM 자동화에는 pywin32가 필요함: pip install pywin32') from exc
+
+    try:
+        hwp = win32com.client.Dispatch('HWPFrame.HwpObject')
+        hwp.RegisterModule('FilePathCheckDLL', 'SecurityModule')
+        hwp.XHwpWindows.Item(0).Visible = visible
+        return hwp
+    except Exception as exc:
+        raise RuntimeError(format_hwp_startup_error(exc)) from exc
+
+
+def _run_hwp_preflight_worker(visible=False):
+    hwp = None
+    try:
+        hwp = create_hwp_object(visible=visible)
+        return 'HWP COM preflight OK: HWPFrame.HwpObject 생성 및 SecurityModule 등록 성공'
+    finally:
+        if hwp is not None:
+            try:
+                hwp.Quit()
+            except Exception:
+                pass
+
+
+def run_hwp_preflight(visible=False, timeout=45):
+    cmd = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        '--_preflight-worker',
+    ]
+    if visible:
+        cmd.append('--_preflight-visible')
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace',
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f'HWP COM preflight timed out after {timeout} seconds.') from exc
+
+    output = (result.stdout or '').strip()
+    error = (result.stderr or '').strip()
+    if result.returncode == 0:
+        return output or 'HWP COM preflight OK'
+    raise RuntimeError(error or output or 'HWP COM preflight failed.')
+
 
 def insert_text(hwp, text):
     hwp.HAction.GetDefault('InsertText', hwp.HParameterSet.HInsertText.HSet)
@@ -962,10 +1044,10 @@ def build_output_path(src_path, output_dir):
     raise FileExistsError(f'저장 가능한 파일명을 찾지 못함: {out_dir / (src.stem + ".hwpx")}')
 
 
-def convert_file(hwp, src_path, hwpx_path, insert_end_mark=False):
+def convert_file(hwp, src_path, hwpx_path, insert_end_mark=False, kordoc_home=None):
     src = as_path(src_path)
     out = as_path(hwpx_path)
-    blocks = detect_and_parse(src)
+    blocks = detect_and_parse(src, kordoc_home=kordoc_home)
 
     hwp.XHwpDocuments.Add(isTab=False)
     time.sleep(0.5)
@@ -993,11 +1075,31 @@ def main(argv=None):
     parser.add_argument('-o', '--output-dir', default=None, help='저장할 폴더 경로 (기본: 입력 파일과 같은 폴더)')
     parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입")
     parser.add_argument('--list-formats', action='store_true', help='지원 형식 목록 출력')
+    parser.add_argument('--preflight', action='store_true', help='HWP COM 실행 가능 여부만 점검하고 종료')
+    parser.add_argument('--kordoc-home', default=None, help='스캔 PDF OCR용 kordoc-ai 경로 (또는 KORDOC_HOME 환경변수)')
+    parser.add_argument('--_preflight-worker', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--_preflight-visible', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+
+    if args._preflight_worker:
+        try:
+            print(_run_hwp_preflight_worker(visible=args._preflight_visible))
+            return 0
+        except Exception as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
 
     if args.list_formats:
         print('지원 입력 형식: ' + ', '.join(sorted(SUPPORTED_EXTENSIONS)))
         return 0
+
+    if args.preflight:
+        try:
+            print(run_hwp_preflight(visible=False))
+            return 0
+        except Exception as exc:
+            print(f'[FAIL] {exc}', file=sys.stderr)
+            return 2
 
     if not args.files:
         parser.error('변환할 파일 경로가 필요함')
@@ -1006,9 +1108,11 @@ def main(argv=None):
     failures = []
     try:
         print('HWP 실행 중...')
-        hwp = win32com.client.Dispatch('HWPFrame.HwpObject')
-        hwp.RegisterModule('FilePathCheckDLL', 'SecurityModule')
-        hwp.XHwpWindows.Item(0).Visible = True
+        try:
+            hwp = create_hwp_object(visible=True)
+        except Exception as exc:
+            print(f'[FAIL] {exc}', file=sys.stderr)
+            return 2
         time.sleep(1.5)
 
         for src_arg in args.files:
@@ -1016,10 +1120,16 @@ def main(argv=None):
                 src_path = as_path(src_arg)
                 hwpx_path = build_output_path(src_path, args.output_dir)
                 print(f'변환 중: {src_path.name} → {hwpx_path.name}')
-                convert_file(hwp, src_path, hwpx_path, insert_end_mark=args.insert_end_mark)
+                convert_file(
+                    hwp,
+                    src_path,
+                    hwpx_path,
+                    insert_end_mark=args.insert_end_mark,
+                    kordoc_home=args.kordoc_home,
+                )
             except Exception as exc:
                 failures.append((src_arg, exc))
-                print(f'[실패] {src_arg}: {exc}', file=sys.stderr)
+                print(f'[FAIL] {src_arg}: {exc}', file=sys.stderr)
     finally:
         if hwp is not None:
             hwp.Quit()

@@ -15,7 +15,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
 import pythoncom
-import win32com.client
 
 import anyway_to_hwpx_com as converter
 
@@ -144,9 +143,7 @@ class ConverterApp(tk.Tk):
         failures = []
         completed = 0
         try:
-            hwp = win32com.client.Dispatch("HWPFrame.HwpObject")
-            hwp.RegisterModule("FilePathCheckDLL", "SecurityModule")
-            hwp.XHwpWindows.Item(0).Visible = True
+            hwp = converter.create_hwp_object(visible=True)
             time.sleep(1.5)
 
             for src in self.files:
@@ -159,6 +156,7 @@ class ConverterApp(tk.Tk):
                         src_path,
                         out_path,
                         insert_end_mark=self.insert_end_mark.get(),
+                        kordoc_home=None,
                     )
                     completed += 1
                     self.messages.put(("log", f"완료: {out_path}"))
@@ -194,7 +192,13 @@ class ConverterApp(tk.Tk):
         self.convert_button.configure(state="normal")
         if failures:
             self.status.set(f"완료 {completed}개, 실패 {len(failures)}개")
-            messagebox.showerror("변환 완료", f"완료 {completed}개, 실패 {len(failures)}개입니다. 로그를 확인하세요.")
+            first_target, first_error = failures[0]
+            messagebox.showerror(
+                "변환 실패",
+                f"완료 {completed}개, 실패 {len(failures)}개입니다.\n\n"
+                f"첫 실패: {first_target}\n{first_error}\n\n"
+                "자세한 내용은 로그를 확인하세요.",
+            )
         else:
             self.status.set(f"전체 변환 완료: {completed}개")
             messagebox.showinfo("변환 완료", f"{completed}개 파일을 변환했습니다.")

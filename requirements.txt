@@ -1,0 +1,8 @@
+pywin32
+python-docx
+beautifulsoup4
+openpyxl
+pdfplumber
+PyMuPDF
+pypdf
+pyinstaller
