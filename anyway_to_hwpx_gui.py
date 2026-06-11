@@ -326,7 +326,7 @@ class ConverterApp(tk.Tk):
                     out_path = converter.build_output_path(src_path, prepared_output_dir)
                     self.messages.put(("progress", completed, total, src_path.name))
                     self.messages.put(("log", f"변환 중: {src_path.name} → {out_path.name}", None))
-                    converter.convert_file(
+                    result = converter.convert_file(
                         hwp,
                         src_path,
                         out_path,
@@ -337,6 +337,9 @@ class ConverterApp(tk.Tk):
                     completed += 1
                     self.messages.put(("progress", completed, total, src_path.name))
                     self.messages.put(("log", f"완료: {out_path.name}", "ok"))
+                    for note in (result or {}).get("notes", []):
+                        tag = "err" if note.startswith("[확인 필요]") else "muted"
+                        self.messages.put(("log", note, tag))
                 except Exception as exc:
                     failures.append((src, exc))
                     self.messages.put(("log", f"실패: {Path(src).name} — {exc}", "err"))

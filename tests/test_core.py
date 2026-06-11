@@ -908,6 +908,214 @@ class TableCellMergeTests(unittest.TestCase):
         self.assertEqual(len(root.findall(f'.//{{{HP_NS}}}tc')), 4)
 
 
+class OdlReadingOrderTests(unittest.TestCase):
+    @staticmethod
+    def _el(page, x0, y0, x1, y1, text):
+        return {
+            'type': 'paragraph', 'page number': page,
+            'bounding box': [x0, y0, x1, y1], 'content': text, 'kids': [],
+        }
+
+    def test_two_column_page_reads_left_column_first(self):
+        """y좌표 순으로 교차된 좌/우 열 요소를 좌열 전체 → 우열 전체로 재정렬."""
+        els = [
+            self._el(1, 50, 900, 350, 920, 'L1'),
+            self._el(1, 450, 880, 750, 920, 'R1'),
+            self._el(1, 50, 800, 350, 850, 'L2'),
+            self._el(1, 450, 780, 750, 840, 'R2'),
+            self._el(1, 50, 700, 350, 750, 'L3'),
+            self._el(1, 450, 680, 750, 740, 'R3'),
+        ]
+        ordered = converter._odl_reading_order(els)
+        self.assertEqual([e['content'] for e in ordered], ['L1', 'L2', 'L3', 'R1', 'R2', 'R3'])
+
+    def test_full_width_title_stays_before_columns(self):
+        els = [
+            self._el(1, 50, 1000, 750, 1040, 'TITLE'),  # 중앙 가로지름
+            self._el(1, 450, 880, 750, 920, 'R1'),
+            self._el(1, 50, 900, 350, 920, 'L1'),
+            self._el(1, 50, 800, 350, 850, 'L2'),
+            self._el(1, 450, 780, 750, 840, 'R2'),
+            self._el(1, 50, 700, 350, 750, 'L3'),
+            self._el(1, 450, 680, 750, 740, 'R3'),
+        ]
+        ordered = converter._odl_reading_order(els)
+        self.assertEqual(
+            [e['content'] for e in ordered],
+            ['TITLE', 'L1', 'L2', 'L3', 'R1', 'R2', 'R3'],
+        )
+
+    def test_single_column_keeps_original_order(self):
+        els = [self._el(1, 50, 1000 - i * 50, 750, 1040 - i * 50, f'P{i}') for i in range(6)]
+        ordered = converter._odl_reading_order(els)
+        self.assertEqual([e['content'] for e in ordered], [f'P{i}' for i in range(6)])
+
+    def test_missing_bbox_keeps_original_order(self):
+        els = [
+            self._el(1, 50, 900, 350, 920, 'A'),
+            {'type': 'paragraph', 'content': 'NO-BBOX', 'kids': []},
+            self._el(1, 450, 880, 750, 920, 'B'),
+        ]
+        ordered = converter._odl_reading_order(els)
+        self.assertEqual([e.get('content') for e in ordered], ['A', 'NO-BBOX', 'B'])
+
+
+class MissingLineRecoveryTests(unittest.TestCase):
+    @staticmethod
+    def _el(page, x0, y0, x1, y1, text):
+        return {
+            'type': 'paragraph', 'page number': page,
+            'bounding box': [x0, y0, x1, y1], 'content': text, 'kids': [],
+        }
+
+    @staticmethod
+    def _line(page, x0, x1, y_top, text):
+        return {'page': page, 'x0': x0, 'x1': x1, 'y_top': y_top, 'text': text}
+
+    def test_missing_line_inserted_by_y_position(self):
+        els = [
+            self._el(1, 50, 900, 400, 920, '8. 문항 줄기'),
+            self._el(1, 50, 800, 400, 850, 'ㄹ. 마지막 보기'),
+            self._el(1, 50, 600, 400, 650, '9. 다음 문항'),
+        ]
+        lines = [self._line(1, 50, 400, 750, '① ㄱ, ㄴ ② ㄱ, ㄷ ③ ㄴ, ㄷ ④ ㄴ, ㄹ ⑤ ㄷ, ㄹ')]
+        merged, recovered, warnings = converter._merge_missing_lines(els, lines)
+        self.assertEqual(len(recovered), 1)
+        self.assertEqual(warnings, [])
+        texts = [e['content'] for e in merged]
+        self.assertEqual(texts.index('① ㄱ, ㄴ ② ㄱ, ㄷ ③ ㄴ, ㄷ ④ ㄴ, ㄹ ⑤ ㄷ, ㄹ'), 2)  # 보기 뒤, 9번 앞
+
+    def test_present_line_with_spacing_difference_not_duplicated(self):
+        els = [self._el(1, 50, 900, 400, 920, '① ㄱ,ㄴ ② ㄱ,ㄷ')]
+        lines = [self._line(1, 50, 400, 910, '①  ㄱ, ㄴ  ②  ㄱ, ㄷ')]
+        merged, recovered, _ = converter._merge_missing_lines(els, lines)
+        self.assertEqual(recovered, [])
+        self.assertEqual(len(merged), 1)
+
+    def test_line_split_across_fragments_not_duplicated(self):
+        els = [
+            self._el(1, 50, 900, 400, 920, '① ㄱ, ㄴ ② ㄱ, ㄷ ③ ㄷ, ㄹ'),
+            self._el(1, 50, 850, 400, 890, '④ ㄱ, ㄴ, ㄹ ⑤ ㄴ, ㄷ, ㄹ'),
+        ]
+        lines = [self._line(1, 50, 400, 905, '① ㄱ, ㄴ ② ㄱ, ㄷ ③ ㄷ, ㄹ ④ ㄱ, ㄴ, ㄹ ⑤ ㄴ, ㄷ, ㄹ')]
+        merged, recovered, _ = converter._merge_missing_lines(els, lines)
+        self.assertEqual(recovered, [])
+        self.assertEqual(len(merged), 2)
+
+    def test_short_and_page_number_lines_skipped(self):
+        els = [self._el(1, 50, 900, 400, 920, '본문')]
+        lines = [
+            self._line(1, 50, 400, 800, '- 11 -'),
+            self._line(1, 50, 400, 700, 'AB'),
+        ]
+        merged, recovered, warnings = converter._merge_missing_lines(els, lines)
+        self.assertEqual(recovered, [])
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(merged), 1)
+
+    def test_running_header_on_three_pages_skipped(self):
+        els = [
+            self._el(1, 50, 900, 400, 920, '1쪽 본문'),
+            self._el(2, 50, 900, 400, 920, '2쪽 본문'),
+            self._el(3, 50, 900, 400, 920, '3쪽 본문'),
+        ]
+        lines = [
+            self._line(p, 50, 400, 1000, '사회탐구 영역 (통합사회)')
+            for p in (1, 2, 3)
+        ]
+        merged, recovered, warnings = converter._merge_missing_lines(els, lines)
+        self.assertEqual(recovered, [])
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(merged), 3)
+
+    def test_line_on_empty_page_becomes_warning(self):
+        els = [self._el(1, 50, 900, 400, 920, '본문')]
+        lines = [self._line(2, 50, 400, 800, '근거 요소가 없는 페이지의 누락 줄')]
+        merged, recovered, warnings = converter._merge_missing_lines(els, lines)
+        self.assertEqual(recovered, [])
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(len(merged), 1)
+
+    def test_two_column_line_inserted_in_right_column(self):
+        els = [
+            self._el(1, 50, 900, 350, 920, 'L1'),
+            self._el(1, 50, 800, 350, 850, 'L2'),
+            self._el(1, 50, 700, 350, 750, 'L3'),
+            self._el(1, 450, 900, 750, 920, 'R1'),
+            self._el(1, 450, 800, 750, 850, 'R2'),
+            self._el(1, 450, 600, 750, 650, 'R3'),
+        ]
+        lines = [self._line(1, 450, 750, 720, '우측 열의 누락된 선택지 줄')]
+        merged, recovered, _ = converter._merge_missing_lines(els, lines)
+        self.assertEqual(len(recovered), 1)
+        texts = [e['content'] for e in merged]
+        # R2(y800)와 R3(y600) 사이
+        self.assertEqual(texts.index('우측 열의 누락된 선택지 줄'), texts.index('R2') + 1)
+
+
+class TwoColumnDetectionTests(unittest.TestCase):
+    @staticmethod
+    def _words(count, x0, x1, top_start=100):
+        return [
+            {'text': f'w{i}', 'x0': x0, 'x1': x1, 'top': top_start + i * 12, 'bottom': top_start + i * 12 + 10}
+            for i in range(count)
+        ]
+
+    def test_two_column_layout_detected(self):
+        words = self._words(30, 50, 300) + self._words(30, 450, 700)
+        self.assertEqual(converter._pdfplumber_column_mid(800, words), 400)
+
+    def test_single_column_returns_none(self):
+        # 본문이 중앙을 가로지르는 일반 단일 컬럼
+        words = self._words(60, 100, 700)
+        self.assertIsNone(converter._pdfplumber_column_mid(800, words))
+
+    def test_few_words_returns_none(self):
+        words = self._words(10, 50, 300) + self._words(10, 450, 700)
+        self.assertIsNone(converter._pdfplumber_column_mid(800, words))
+
+    def test_unbalanced_columns_returns_none(self):
+        words = self._words(50, 50, 300) + self._words(5, 450, 700)
+        self.assertIsNone(converter._pdfplumber_column_mid(800, words))
+
+
+def make_paged_table_section_xml(cols=2, table_width=41954, page_width=59528, margin=7087):
+    cell_w = table_width // cols
+    tcs = ''.join(
+        f'<hp:tc><hp:subList><hp:p/></hp:subList>'
+        f'<hp:cellAddr colAddr="{c}" rowAddr="0"/>'
+        f'<hp:cellSpan colSpan="1" rowSpan="1"/>'
+        f'<hp:cellSz width="{cell_w}" height="900"/></hp:tc>'
+        for c in range(cols)
+    )
+    return (
+        '<hp:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">'
+        f'<hp:pagePr landscape="WIDELY" width="{page_width}" height="84186">'
+        f'<hp:margin header="2835" footer="2835" gutter="0" left="{margin}" '
+        f'right="{margin}" top="7087" bottom="5669"/></hp:pagePr>'
+        f'<hp:tbl rowCnt="1" colCnt="{cols}">'
+        f'<hp:sz width="{table_width}" height="900"/>'
+        f'<hp:tr>{tcs}</hp:tr></hp:tbl></hp:sec>'
+    )
+
+
+class TableTextWidthTests(unittest.TestCase):
+    def test_table_expands_to_text_width(self):
+        """규칙 8-1: 표 폭이 본문 폭(페이지 - 좌우 여백)으로 확장된다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'test.hwpx'
+            make_hwpx_with_section(path, make_paged_table_section_xml())
+            converter.apply_table_layout_profiles(path, [{'header': ['구분', '내용'], 'rows': [['a', 'b']]}])
+            root = read_section(path)
+        text_width = 59528 - 7087 * 2  # 45354
+        widths = [
+            int(sz.get('width')) for sz in root.iter(f'{{{HP_NS}}}cellSz')
+        ]
+        self.assertEqual(sum(widths), text_width)
+        tbl_sz = root.find(f'.//{{{HP_NS}}}tbl/{{{HP_NS}}}sz')
+        self.assertEqual(int(tbl_sz.get('width')), text_width)
+
+
 class OfficialPostProcessTests(unittest.TestCase):
     def test_page_margins_rewritten(self):
         section = (

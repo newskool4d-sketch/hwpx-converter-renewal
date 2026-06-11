@@ -621,6 +621,24 @@ def _odl_table_grid(element):
     return [grid[ri] for ri in kept], remapped
 
 
+def _odl_text_to_block(content, default_type="p"):
+    """ODL 텍스트를 항목기호 정규화를 거쳐 li 또는 p 블록으로 변환.
+
+    '1.다음 …'처럼 점 뒤 공백이 없는 PDF 추출 텍스트도
+    공문서 항목기호 규칙('1. ' 1타)으로 정규화된다.
+    """
+    li_result = _detect_list_item(content)
+    if li_result and li_result['marker'] != '•':
+        return {
+            'type': 'li',
+            'text': li_result['text'],
+            'depth': li_result['depth'],
+            'marker': li_result['marker'],
+            'content': li_result['content'],
+        }
+    return {'type': default_type, 'text': content, **({'depth': 1} if default_type == 'li' else {})}
+
+
 def _odl_element_to_blocks(element):
     """opendataloader-pdf JSON element 하나를 내부 blocks 리스트로 변환."""
     blocks = []
@@ -635,7 +653,7 @@ def _odl_element_to_blocks(element):
     elif etype in ("paragraph", "caption"):
         content = element.get("content", "").strip()
         if content:
-            blocks.append({"type": "p", "text": content})
+            blocks.append(_odl_text_to_block(content))
 
     elif etype == "table":
         grid, merges = _odl_table_grid(element)
@@ -646,7 +664,7 @@ def _odl_element_to_blocks(element):
         for item in element.get("list items", []):
             content = item.get("content", "").strip()
             if content:
-                blocks.append({"type": "li", "text": content, "depth": 0})
+                blocks.append(_odl_text_to_block(content, default_type="li"))
             for child in item.get("kids", []):
                 blocks.extend(_odl_element_to_blocks(child))
 
@@ -658,10 +676,351 @@ def _odl_element_to_blocks(element):
     return blocks
 
 
-def _odl_data_to_blocks(data):
-    """opendataloader-pdf JSON 최상위 객체 전체를 blocks 리스트로 변환."""
+def _odl_element_meta(element):
+    """요소의 (page, x0, y0, x1, y1). 좌표 정보가 없으면 None."""
+    bb = element.get('bounding box')
+    page = element.get('page number')
+    if not bb or len(bb) < 4 or not isinstance(page, int):
+        return None
+    try:
+        return (page, float(bb[0]), float(bb[1]), float(bb[2]), float(bb[3]))
+    except (TypeError, ValueError):
+        return None
+
+
+def _page_column_classifier(metas):
+    """페이지 내 요소 좌표로 (열 판별 함수, 2단 여부)를 반환.
+
+    열 판별 함수는 (x0, x1)을 받아 'left'/'right'/'full'을 돌려준다.
+    """
+    x_min = min(m[1] for m in metas)
+    x_max = max(m[3] for m in metas)
+    mid = (x_min + x_max) / 2
+    tol = (x_max - x_min) * 0.05
+
+    def column_of(x0, x1):
+        if x0 < mid - tol and x1 > mid + tol:
+            return 'full'
+        return 'left' if (x0 + x1) / 2 < mid else 'right'
+
+    columns = [column_of(m[1], m[3]) for m in metas]
+    is_two_col = columns.count('left') >= 3 and columns.count('right') >= 3
+    return column_of, is_two_col
+
+
+def _odl_reading_order(elements):
+    """2단 조판 페이지의 요소를 좌표 기반(좌열 전체 → 우열 전체)으로 재정렬.
+
+    ODL이 좌/우 열 본문을 y좌표 순으로 교차 배열하는 경우(시험지 등)를
+    교정한다. 중앙을 가로지르는 요소는 밴드 경계로 취급하고, 단일 컬럼
+    페이지나 좌표 없는 요소가 있으면 원본 순서를 유지한다.
+    """
+    metas = [_odl_element_meta(e) for e in elements]
+    if not elements or any(m is None for m in metas):
+        return list(elements)
+    pages = {}
+    for element, meta in zip(elements, metas):
+        pages.setdefault(meta[0], []).append((element, meta))
+    ordered = []
+    for page in sorted(pages):
+        items = pages[page]
+        classify, is_two_col = _page_column_classifier([m for _, m in items])
+
+        def column_of(meta):
+            return classify(meta[1], meta[3])
+
+        if not is_two_col:
+            ordered.extend(e for e, _ in items)
+            continue
+        # PDF 좌표(원점 좌하단): 위→아래 = y1 내림차순
+        seq = sorted(
+            ((item, column_of(item[1])) for item in items),
+            key=lambda it: -it[0][1][4],
+        )
+        band = {'left': [], 'right': []}
+
+        def flush_band():
+            ordered.extend(e for e in band['left'])
+            ordered.extend(e for e in band['right'])
+            band['left'], band['right'] = [], []
+
+        for (element, meta), col in seq:
+            if col == 'full':
+                flush_band()
+                ordered.append(element)
+            else:
+                band[col].append(element)
+        flush_band()
+    return ordered
+
+
+# ─── 변환 노트 (보완·경고 메시지를 CLI·GUI 양쪽에 전달) ─────────────────────────
+
+_conversion_notes = []
+
+
+def _add_conversion_note(message):
+    _conversion_notes.append(message)
+    print(message)
+
+
+def pop_conversion_notes():
+    notes = list(_conversion_notes)
+    _conversion_notes.clear()
+    return notes
+
+
+# ─── ODL 누락 줄 자동 보완 (pdfplumber 교차 검증) ──────────────────────────────
+
+_MATCH_TRANSLATE = str.maketrans({
+    'ㆍ': '·', '∼': '~', '−': '-', '–': '-', '—': '-',
+    ' ': '', '“': '"', '”': '"', '‘': "'", '’': "'",
+})
+
+
+def _norm_match_text(text):
+    """엔진 간 대조용 정규화: 공백 제거 + 유사 문자 통일."""
+    return re.sub(r'\s+', '', str(text or '')).translate(_MATCH_TRANSLATE)
+
+
+def _odl_subtree_texts(element):
+    """요소 서브트리의 모든 content 문자열 수집 (표 셀·목록 항목 포함)."""
+    texts = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            content = str(node.get('content', '') or '')
+            if content.strip():
+                texts.append(content)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(element)
+    return texts
+
+
+def _group_words_into_lines(page_no, page_height, words):
+    lines = []
+    current, current_top = [], None
+    for word in sorted(words, key=lambda w: (_word_number(w, 'top'), _word_number(w, 'x0'))):
+        top = _word_number(word, 'top')
+        if current_top is None or abs(top - current_top) <= 4:
+            current.append(word)
+            current_top = top if current_top is None else current_top
+            continue
+        lines.append(_line_from_words(page_no, page_height, current))
+        current, current_top = [word], top
+    if current:
+        lines.append(_line_from_words(page_no, page_height, current))
+    return lines
+
+
+def _pdfplumber_page_lines(path):
+    """pdfplumber로 페이지별 텍스트 줄을 좌표(PDF 좌표계)와 함께 추출.
+
+    - 표 영역 안의 줄 제외 (셀 줄바꿈 차이로 인한 오탐 방지)
+    - 2단 페이지는 열별로 줄을 구성 (좌·우 열 합성 줄 방지)
+    """
+    import pdfplumber
+
+    lines = []
+    with pdfplumber.open(str(path)) as pdf:
+        for page_no, page in enumerate(pdf.pages, start=1):
+            height = float(page.height or 0)
+            table_bboxes = [t.bbox for t in (page.find_tables() or [])]
+            words = [
+                w for w in (page.extract_words() or [])
+                if not any(_word_inside_bbox(w, bbox) for bbox in table_bboxes)
+            ]
+            mid = _pdfplumber_column_mid(getattr(page, 'width', 0), words)
+            if mid is None:
+                word_groups = [words]
+            else:
+                word_groups = [
+                    [w for w in words if _word_center_x(w) < mid],
+                    [w for w in words if _word_center_x(w) >= mid],
+                ]
+            for group in word_groups:
+                lines.extend(_group_words_into_lines(page_no, height, group))
+    return [ln for ln in lines if ln]
+
+
+def _line_from_words(page_no, page_height, words):
+    text = ' '.join(str(w.get('text', '')).strip() for w in words).strip()
+    if not text:
+        return None
+    return {
+        'page': page_no,
+        'x0': min(_word_number(w, 'x0') for w in words),
+        'x1': max(_word_number(w, 'x1') for w in words),
+        # PDF 좌표계(원점 좌하단)로 변환: ODL bbox와 동일 기준
+        'y_top': page_height - min(_word_number(w, 'top') for w in words),
+        'text': text,
+    }
+
+
+_PAGE_NUMBER_LINE = re.compile(r'^[-‒–—]?\s*\d{1,3}\s*[-‒–—]?$')
+
+
+def _merge_missing_lines(elements, lines):
+    """ODL 결과에 없는 pdfplumber 줄을 좌표 기반 위치에 삽입.
+
+    Returns:
+        (elements, recovered_texts, warning_texts)
+        - 확실한 위치를 찾은 줄은 paragraph 요소로 삽입
+        - 페이지에 기준 요소가 없는 줄은 warning으로만 보고
+        - 짧은 줄·쪽번호·반복 머리글(3개 페이지 이상 동일)은 무시
+    """
+    elements = list(elements)
+    metas = [_odl_element_meta(e) for e in elements]
+    if not elements or any(m is None for m in metas):
+        return elements, [], []
+
+    # 페이지별 코퍼스 (동일 텍스트가 여러 문항에 반복되는 경우 대비)
+    page_corpus = {}
+    for element, meta in zip(elements, metas):
+        page_corpus.setdefault(meta[0], []).append(
+            _norm_match_text(' '.join(_odl_subtree_texts(element)))
+        )
+
+    # ODL이 이미지로 처리한 영역(그림 내부 라벨)은 보완 대상에서 제외
+    image_boxes = {}
+    for element, meta in zip(elements, metas):
+        if element.get('type') == 'image' and meta:
+            image_boxes.setdefault(meta[0], []).append(meta[1:])
+
+    def _inside_image(line):
+        cx = (line['x0'] + line['x1']) / 2
+        cy = line['y_top'] - 5
+        for x0, y0, x1, y1 in image_boxes.get(line['page'], ()):
+            if x0 <= cx <= x1 and y0 <= cy <= y1:
+                return True
+        return False
+
+    # 머리글·꼬리말 제외: ODL 본문 요소 영역(envelope) 밖 y좌표의 줄
+    page_envelope = {}
+    for meta in metas:
+        lo, hi = page_envelope.get(meta[0], (float('inf'), float('-inf')))
+        page_envelope[meta[0]] = (min(lo, meta[2]), max(hi, meta[4]))
+
+    def _outside_body(line):
+        lo, hi = page_envelope.get(line['page'], (None, None))
+        if lo is None:
+            return False
+        return line['y_top'] > hi + 5 or line['y_top'] - 10 < lo - 5
+
+    def _missing_instances(page, norm, instances):
+        """같은 페이지에서 norm이 등장하는 줄 인스턴스 중 ODL에 없는 것을 선별.
+
+        동일 텍스트가 여러 문항에 반복될 수 있으므로, norm을 포함한 ODL
+        요소의 y좌표와 인스턴스를 짝지어 남는 인스턴스만 누락으로 본다.
+        """
+        joined = ''.join(page_corpus.get(page, []))
+        if norm not in joined:
+            return list(instances)
+        element_ys = [
+            m[4] for element, m in zip(elements, metas)
+            if m[0] == page and norm in _norm_match_text(' '.join(_odl_subtree_texts(element)))
+        ]
+        budget = max(1, len(element_ys))
+        if len(instances) <= budget:
+            return []
+        # 요소 y와 가까운 인스턴스부터 '존재'로 매칭, 남는 것이 누락
+        remaining = list(instances)
+        for ey in element_ys:
+            if not remaining:
+                break
+            closest = min(remaining, key=lambda ln: abs(ln['y_top'] - ey))
+            remaining.remove(closest)
+        # element_ys가 비었지만 joined에 있는 경우(조각 분할)는 1개를 존재로 간주
+        if not element_ys and remaining:
+            remaining = sorted(remaining, key=lambda ln: -ln['y_top'])[1:]
+        return remaining
+
+    page_joined = {page: ''.join(parts) for page, parts in page_corpus.items()}
+
+    # (페이지, 정규화 텍스트) 단위로 묶어 누락 인스턴스 선별
+    grouped = {}
+    for line in lines:
+        norm = _norm_match_text(line['text'])
+        if len(norm) < 6 or _PAGE_NUMBER_LINE.match(line['text'].strip()):
+            continue
+        if _outside_body(line):
+            continue
+        if _inside_image(line):
+            continue
+        joined = page_joined.get(line['page'], '')
+        if norm not in joined:
+            # 부분 일치: 줄바꿈 병합 차이·그림 라벨 합성으로 인한 유사 중복 스킵
+            trim = max(6, len(norm) // 3)
+            if len(norm) > trim and (norm[trim:] in joined or norm[:-trim] in joined):
+                continue
+        grouped.setdefault((line['page'], norm), []).append(line)
+
+    missing_lines = []
+    for (page, norm), instances in grouped.items():
+        missing_lines.extend(_missing_instances(page, norm, instances))
+
+    recovered, warnings = [], []
+    for line in sorted(missing_lines, key=lambda ln: (ln['page'], -ln['y_top'])):
+        page_items = [(i, m) for i, m in enumerate(metas) if m and m[0] == line['page']]
+        if not page_items:
+            warnings.append(line['text'])
+            continue
+        classify, is_two_col = _page_column_classifier([m for _, m in page_items])
+        candidates = page_items
+        if is_two_col:
+            line_col = classify(line['x0'], line['x1'])
+            if line_col in ('left', 'right'):
+                same_col = [
+                    (i, m) for i, m in page_items
+                    if classify(m[1], m[3]) == line_col
+                ]
+                if same_col:
+                    candidates = same_col
+        insert_at = None
+        for i, m in candidates:
+            if m[4] < line['y_top']:  # 요소 상단이 줄보다 아래 → 줄을 그 앞에
+                insert_at = i
+                break
+        if insert_at is None:
+            insert_at = candidates[-1][0] + 1
+        synthetic = {
+            'type': 'paragraph',
+            'page number': line['page'],
+            'bounding box': [line['x0'], line['y_top'] - 10, line['x1'], line['y_top']],
+            'content': line['text'],
+            'kids': [],
+        }
+        elements.insert(insert_at, synthetic)
+        metas.insert(insert_at, _odl_element_meta(synthetic))
+        recovered.append(line['text'])
+    return elements, recovered, warnings
+
+
+def _odl_data_to_blocks(data, source_path=None):
+    """opendataloader-pdf JSON 최상위 객체 전체를 blocks 리스트로 변환.
+
+    source_path가 주어지면 pdfplumber 교차 검증으로 ODL이 유실한 줄을
+    자동 보완하고, 보완 불가 줄은 변환 노트로 보고한다.
+    """
+    elements = _odl_reading_order(data.get("kids", []))
+    if source_path is not None:
+        try:
+            lines = _pdfplumber_page_lines(source_path)
+        except Exception:
+            lines = []
+        if lines:
+            elements, recovered, warnings = _merge_missing_lines(elements, lines)
+            if recovered:
+                _add_conversion_note(f'[보완] PDF 교차 검증: 누락 줄 {len(recovered)}건 자동 복구')
+            for warning in warnings:
+                _add_conversion_note(f'[확인 필요] 위치를 정하지 못한 누락 줄: {warning[:50]}')
     blocks = []
-    for element in data.get("kids", []):
+    for element in elements:
         blocks.extend(_odl_element_to_blocks(element))
     return blocks
 
@@ -692,7 +1051,7 @@ def extract_pdf_blocks_odl(path):
 
         data = json.loads(json_files[0].read_text(encoding="utf-8"))
 
-    blocks = _odl_data_to_blocks(data)
+    blocks = _odl_data_to_blocks(data, source_path=path)
     if not blocks:
         raise RuntimeError("opendataloader-pdf: 추출된 blocks가 없음")
     return blocks
@@ -768,20 +1127,39 @@ def _pdfplumber_words_to_text(words):
     return '\n'.join(lines)
 
 
-def _pdfplumber_page_to_blocks(page):
-    table_items = []
-    for table in page.find_tables() or []:
-        block = _pdfplumber_table_to_block(table.extract())
-        if block:
-            table_items.append((table.bbox, block))
-    table_items.sort(key=lambda item: item[0][1])
+def _word_center_x(word):
+    return (_word_number(word, 'x0') + _word_number(word, 'x1')) / 2
 
-    if not table_items:
-        page_text = page.extract_text() or ''
-        if page_text.strip():
-            return parse_markdown(page_text)
 
-    words = page.extract_words() or []
+def _pdfplumber_column_mid(page_width, words):
+    """2단(좌/우) 레이아웃 감지. 2단이면 분할 x좌표, 아니면 None.
+
+    페이지 중앙을 가로지르는 단어가 적고 좌·우에 내용이 고르게 분포할 때만
+    2단으로 판단한다 (시험지·자료집의 2단 조판).
+    """
+    try:
+        page_width = float(page_width or 0)
+    except (TypeError, ValueError):
+        return None
+    if page_width <= 0 or not words or len(words) < 40:
+        return None
+    mid = page_width / 2
+    crossing = sum(
+        1 for w in words
+        if _word_number(w, 'x0') < mid - 8 and _word_number(w, 'x1') > mid + 8
+    )
+    if crossing / len(words) > 0.08:
+        return None
+    left = sum(1 for w in words if _word_center_x(w) < mid)
+    right = len(words) - left
+    if min(left, right) / len(words) < 0.25:
+        return None
+    return mid
+
+
+def _pdfplumber_region_blocks(words, table_items):
+    """단어·표 목록 하나의 영역(열)을 위→아래 순서로 blocks로 변환."""
+    table_items = sorted(table_items, key=lambda item: item[0][1])
     table_bboxes = [bbox for bbox, _ in table_items]
     blocks = []
     cursor = 0.0
@@ -791,14 +1169,40 @@ def _pdfplumber_page_to_blocks(page):
             blocks.extend(parse_plain_text(text))
         blocks.append(block)
         cursor = max(cursor, bbox[3])
-
     text = _pdfplumber_words_to_text(_words_in_vertical_band(words, cursor, float('inf'), table_bboxes))
     if text.strip():
         blocks.extend(parse_plain_text(text))
-    if blocks:
+    return blocks
+
+
+def _pdfplumber_page_to_blocks(page):
+    table_items = []
+    for table in page.find_tables() or []:
+        block = _pdfplumber_table_to_block(table.extract())
+        if block:
+            table_items.append((table.bbox, block))
+
+    words = page.extract_words() or []
+    mid = _pdfplumber_column_mid(getattr(page, 'width', 0), words)
+
+    if mid is not None:
+        # 2단 조판: 좌측 열 전체 → 우측 열 전체 순서로 읽는다
+        blocks = []
+        for is_left in (True, False):
+            side_words = [w for w in words if (_word_center_x(w) < mid) == is_left]
+            side_tables = [
+                (bbox, block) for bbox, block in table_items
+                if (((bbox[0] + bbox[2]) / 2) < mid) == is_left
+            ]
+            blocks.extend(_pdfplumber_region_blocks(side_words, side_tables))
         return blocks
 
-    return []
+    if not table_items:
+        page_text = page.extract_text() or ''
+        if page_text.strip():
+            return parse_markdown(page_text)
+
+    return _pdfplumber_region_blocks(words, table_items)
 
 
 def extract_pdf_blocks_pdfplumber(path):
@@ -1040,6 +1444,7 @@ def parse_docx(docx_path):
 def detect_and_parse(file_path, kordoc_home=None):
     path = as_path(file_path)
     require_file(path)
+    _conversion_notes.clear()
     ext = path.suffix.lower()
     if ext not in SUPPORTED_EXTENSIONS:
         supported = ', '.join(sorted(SUPPORTED_EXTENSIONS))
@@ -1526,6 +1931,24 @@ def apply_table_cell_merges(hwpx_path, table_layouts):
         print(f'[경고] 셀 병합 후처리 실패: {e}', file=sys.stderr)
 
 
+def _section_text_width(root):
+    """secPr의 페이지 크기·여백으로 본문 폭(HWPUNIT)을 계산. 없으면 None."""
+    page_pr = root.find(f'.//{{{_NS_HP}}}pagePr')
+    if page_pr is None:
+        return None
+    page_width = _int_attr(page_pr, 'width', 0)
+    margin = page_pr.find(f'{{{_NS_HP}}}margin')
+    if page_width <= 0 or margin is None:
+        return None
+    width = (
+        page_width
+        - _int_attr(margin, 'left', 0)
+        - _int_attr(margin, 'right', 0)
+        - _int_attr(margin, 'gutter', 0)
+    )
+    return width if width > 1000 else None
+
+
 def apply_table_layout_profiles(hwpx_path, table_layouts):
     if not table_layouts or not os.path.exists(hwpx_path):
         return
@@ -1542,6 +1965,7 @@ def apply_table_layout_profiles(hwpx_path, table_layouts):
             ET.register_namespace(prefix.decode(), uri.decode())
         root = ET.fromstring(section_xml)
         changed = False
+        text_width = _section_text_width(root)
         tables = root.findall('.//hp:tbl', ns)
         for ti, tbl in enumerate(tables):
             if ti >= len(table_layouts):
@@ -1550,10 +1974,14 @@ def apply_table_layout_profiles(hwpx_path, table_layouts):
             col_count = int(tbl.attrib.get('colCnt', '0') or 0)
             if col_count <= 0:
                 continue
-            total_width = TABLE_TOTAL_WIDTH
             sz = tbl.find('hp:sz', ns)
-            if sz is not None:
-                total_width = int(sz.attrib.get('width', total_width) or total_width)
+            if text_width:
+                # 규칙 8-1: 표는 본문 폭 전체로 작성
+                total_width = text_width
+            elif sz is not None:
+                total_width = int(sz.attrib.get('width', TABLE_TOTAL_WIDTH) or TABLE_TOTAL_WIDTH)
+            else:
+                total_width = TABLE_TOTAL_WIDTH
             widths = calc_col_widths(header, rows, total_width)
             if len(widths) != col_count:
                 profile = _table_header_profile(header, col_count)
@@ -1562,6 +1990,8 @@ def apply_table_layout_profiles(hwpx_path, table_layouts):
                 else:
                     widths = _profile_to_widths([1] * col_count, total_width)
             row_heights = calc_row_heights(header, rows, widths)
+            if sz is not None:
+                changed = _set_attrs(sz, {'width': sum(widths), 'height': sum(row_heights)}) or changed
             cell_margin = calc_table_cell_margin(header, rows, widths)
             cell_para_space = calc_table_cell_para_space(header, rows, widths)
             after_para_space = calc_table_after_para_space(header, rows, widths)
@@ -1916,6 +2346,7 @@ def convert_file(hwp, src_path, hwpx_path, insert_end_mark=False, kordoc_home=No
     src = as_path(src_path)
     out = as_path(hwpx_path)
     blocks = detect_and_parse(src, kordoc_home=kordoc_home)
+    notes = pop_conversion_notes()
     if insert_end_mark:
         blocks = normalize_official_dates(blocks)
         blocks = append_end_mark_blocks(blocks)
@@ -1940,13 +2371,14 @@ def convert_file(hwp, src_path, hwpx_path, insert_end_mark=False, kordoc_home=No
     finally:
         _com_call(lambda: doc.Close(isDirty=False))
         time.sleep(0.3)
+    apply_official_page_margins(out)  # 여백 먼저 — 표 폭이 본문 폭 기준으로 계산되도록
     apply_table_layout_profiles(out, table_layouts)
     apply_list_hanging_indents(out)
     apply_table_cell_merges(out, table_layouts)
     apply_table_header_shading(out, table_layouts)
-    apply_official_page_margins(out)
     ext = src.suffix.upper().lstrip('.')
     print(f'[완료] {ext} → {out.name}')
+    return {'notes': notes}
 
 
 def main(argv=None):
