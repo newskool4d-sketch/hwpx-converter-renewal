@@ -104,3 +104,29 @@
 - PyInstaller warning file reviewed at `build/anyway_to_hwpx_gui/warn-anyway_to_hwpx_gui.txt`; listed modules are mostly optional, platform-specific, or conditional imports from bundled dependencies.
 - `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py`: pass.
 - `python -m unittest discover -s tests`: pass, 7 tests.
+
+## 2026-06-08 HWP COM sample gate and lightweight EXE rebuild
+
+- HWP COM hidden preflight command: `python anyway_to_hwpx_com.py --preflight`.
+- Hidden preflight result: fail, `[FAIL] HWP COM preflight timed out after 45 seconds.`
+- HWP COM visible preflight command: `python -c "import anyway_to_hwpx_com as m; print(m.run_hwp_preflight(visible=True, timeout=90))"`.
+- Visible preflight result: fail, `RuntimeError: HWP COM preflight timed out after 90 seconds.`
+- Actual HWPX sample conversion was not run after the failed preflight because the COM startup gate did not pass.
+- Rebuilt EXE with the feature-preserving lightweight spec: `python -m PyInstaller --clean --noconfirm anyway_to_hwpx_gui.spec`.
+- New output: `dist/anyway_to_hwpx_gui.exe` (79,728,480 bytes, 76.04 MiB).
+- Previous large baseline kept for comparison: `dist/anyway_to_hwpx_gui ver 4.exe` (363,749,849 bytes, 346.90 MiB).
+- Size change: -284,021,369 bytes (-270.86 MiB), 78.08% smaller.
+- Existing PDF/ODL/HWP conversion features were kept in the spec; actual HWP COM visual rendering still requires a Hancom HWP environment where preflight completes.
+
+## 2026-06-09 HWP COM preflight 복구 + 열너비 비율 버그 수정
+
+- `python anyway_to_hwpx_com.py --preflight`: `HWP COM preflight OK: HWPFrame.HwpObject 생성 및 SecurityModule 등록 성공` — 이전 세션 타임아웃 문제 해결됨.
+- `python anyway_to_hwpx_com.py samples/sample.md -o out`: 변환 완료. `[경고] 열 너비 조정 실패: TableColWidth action unavailable` 경고는 유지되나 XML 후처리가 이를 보완함.
+- HWP COM 조사 결과 `TableColWidth` 액션이 이 버전에서 사용 불가. `TableCreate WidthValue` 설정도 무시되며 항상 기본 텍스트 영역 너비(41954 hwpUnit)로 생성됨.
+- 버그: `COLUMN_PROFILES` min/max가 TABLE_TOTAL_WIDTH=14000 기준 고정값이어서 41954 너비 표에 적용 시 열 비율이 왜곡됨 (예: ['항목','값'] → 4.5%:95.5%).
+- 수정 1 — `hwpx_layout.py` `_infer_col_kind`: 헤더가 있는 컬럼은 'name' 폴백 분류 제거 (`not header_text` 조건 추가).
+- 수정 2 — `hwpx_layout.py` `_redistribute_widths`: `scale` 파라미터 추가 (`total / TABLE_TOTAL_WIDTH`), min/max를 scale에 비례 적용.
+- 수정 3 — `hwpx_layout.py` `calc_col_widths`: scale 계산 후 `_redistribute_widths`에 전달, pref도 scale 적용.
+- `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py hwpx_layout.py`: pass.
+- `python -m unittest discover -s tests -q`: `Ran 26 tests ... OK` (신규 2개 추가: `test_column_widths_scale_to_large_table_width`, `test_column_widths_scale_proportionally_across_totals`).
+- 실제 변환 검증: `samples/sample.md` → `out/sample - 3.hwpx`, 열 비율 28.0%:72.0% (기대: 28:72) ✓.

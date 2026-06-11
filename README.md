@@ -25,7 +25,7 @@ Run the GUI executable if you have a local build:
 dist\anyway_to_hwpx_gui.exe
 ```
 
-Then select source files, choose an output folder, and start conversion.
+Then select source files, choose an output folder, and start conversion. You can optionally enable "저장 폴더 비우기(앱 관리 파일만)" to clear only files recorded in the app manifest from a previous run.
 
 Existing HWPX files are not overwritten. The converter appends ` - 2`, ` - 3`, and so on.
 
@@ -48,6 +48,14 @@ Convert with optional end mark insertion:
 ```powershell
 python anyway_to_hwpx_com.py "input.md" -o "C:\output" --insert-end-mark
 ```
+
+Reuse an app-managed output folder as an empty folder:
+
+```powershell
+python anyway_to_hwpx_com.py "input.md" -o "C:\output" --empty-output-folder
+```
+
+`--empty-output-folder` refuses non-empty folders unless they contain this app's manifest and all existing files are listed in that manifest.
 
 Use a custom OCR path for scanned PDFs:
 
@@ -118,7 +126,17 @@ python anyway_to_hwpx_com.py samples\sample.md -o out
 ### Build GUI Executable
 
 ```powershell
-python -m PyInstaller --onefile --windowed --name anyway_to_hwpx_gui --clean --hidden-import=pdfplumber --hidden-import=fitz --hidden-import=pymupdf .\anyway_to_hwpx_gui.py
+python -m PyInstaller --clean .\anyway_to_hwpx_gui.spec
+```
+
+The spec defaults to `HWPX_GUI_PDF_STACK=full`, which bundles the structured PDF extraction path and text PDF fallback libraries. Smaller builds can opt out of part of the PDF stack:
+
+```powershell
+$env:HWPX_GUI_PDF_STACK = "text"
+python -m PyInstaller --clean .\anyway_to_hwpx_gui.spec
+
+$env:HWPX_GUI_PDF_STACK = "none"
+python -m PyInstaller --clean .\anyway_to_hwpx_gui.spec
 ```
 
 Review PyInstaller warnings before distribution, especially optional PDF/OCR modules.

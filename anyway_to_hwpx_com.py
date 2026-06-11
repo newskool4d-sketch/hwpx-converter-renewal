@@ -4,18 +4,56 @@ HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX �
 """
 from pathlib import Path
 import argparse
+import copy
 import csv
-import math
+import json
 import os
 import re
 import subprocess
 import sys
 import time
-import unicodedata
 import zipfile
 import tempfile
 import shutil
 import xml.etree.ElementTree as ET
+
+from hwpx_layout import (
+    OFFICIAL_LIST_MAX_DEPTH,
+    TABLE_AFTER_PARA_SPACE,
+    TABLE_CELL_MARGIN,
+    TABLE_CELL_PARA_SPACE,
+    TABLE_MIN_ROW_HEIGHT,
+    TABLE_TOTAL_WIDTH,
+    _profile_to_widths,
+    _table_header_profile,
+    calc_col_widths,
+    calc_row_heights,
+    calc_table_after_para_space,
+    calc_table_cell_margin,
+    calc_table_cell_para_space,
+    detect_official_list_item,
+    normalize_table_rows,
+    official_list_para_shape,
+)
+
+
+def _configure_utf8_stdio():
+    os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
+    for stream_name in ('stdout', 'stderr'):
+        stream = getattr(sys, stream_name, None)
+        if stream is not None and hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
+
+
+def _utf8_subprocess_env():
+    env = os.environ.copy()
+    env.setdefault('PYTHONIOENCODING', 'utf-8')
+    env.setdefault('PYTHONUTF8', '1')
+    return env
+
+
+_configure_utf8_stdio()
+
 
 SUPPORTED_EXTENSIONS = {'.md', '.txt', '.docx', '.html', '.htm', '.csv', '.xlsx', '.pdf'}
 OPTIONAL_DEPENDENCIES = {
@@ -23,8 +61,9 @@ OPTIONAL_DEPENDENCIES = {
     '.html': 'beautifulsoup4',
     '.htm': 'beautifulsoup4',
     '.xlsx': 'openpyxl',
-    '.pdf': 'KORDOC_HOME 환경변수 또는 --kordoc-home, pdfplumber, PyMuPDF 또는 pypdf',
+    '.pdf': 'opendataloader-pdf (권장), KORDOC_HOME 환경변수 또는 --kordoc-home, pdfplumber, PyMuPDF 또는 pypdf',
 }
+OUTPUT_MANIFEST_NAME = '.anyway_to_hwpx_output.json'
 
 
 def as_path(value):
@@ -89,37 +128,85 @@ def _clean_inline(text):
 def _is_separator(line):
     if len(line) > 500:
         return False
-    cells = line.strip().strip('|').split('|')
+    cells = _split_markdown_table_cells(line)
     return len(cells) >= 1 and all(re.match(r'^[ \t]*:?-+:?[ \t]*$', c) for c in cells)
 
 
+def _split_markdown_table_cells(line):
+    stripped = line.strip()
+    if stripped.startswith('|'):
+        stripped = stripped[1:]
+    if stripped.endswith('|'):
+        stripped = stripped[:-1]
+
+    cells = []
+    current = []
+    escaped = False
+    for char in stripped:
+        if escaped:
+            if char == '|':
+                current.append('|')
+            else:
+                current.append('\\')
+                current.append(char)
+            escaped = False
+            continue
+        if char == '\\':
+            escaped = True
+            continue
+        if char == '|':
+            cells.append(''.join(current))
+            current = []
+            continue
+        current.append(char)
+    if escaped:
+        current.append('\\')
+    cells.append(''.join(current))
+    return cells
+
+
 def _parse_table_row(line):
-    line = line.strip().strip('|')
-    return [_clean_inline(c.strip()) for c in line.split('|')]
+    return [_clean_inline(c.strip()) for c in _split_markdown_table_cells(line)]
+
+
+def _normalize_parsed_table(header, rows):
+    normalized, _ = normalize_table_rows(header, rows)
+    if not normalized:
+        return header, rows
+    return normalized[0], normalized[1:]
 
 
 def _detect_list_item(line):
-    stripped = line.strip()
-    checks = [
-        (7, re.compile(r'^([㉮㉯㉰㉱㉲㉳㉴㉵㉶㉷])\s+(.*)')),
-        (6, re.compile(r'^([①②③④⑤⑥⑦⑧⑨⑩])\s+(.*)')),
-        (5, re.compile(r'^(\([가나다라마바사아자차카타파하]\))\s+(.*)')),
-        (4, re.compile(r'^(\(\d+\))\s+(.*)')),
-        (3, re.compile(r'^([가나다라마바사아자차카타파하]\))\s+(.*)')),
-        (2, re.compile(r'^(\d+\))\s+(.*)')),
-        (1, re.compile(r'^([가나다라마바사아자차카타파하]\.)\s+(.*)')),
-        (0, re.compile(r'^(\d+\.)\s+(.*)')),
-    ]
-    for depth, pattern in checks:
-        m = pattern.match(stripped)
-        if m:
-            marker = m.group(1)
-            content = _clean_inline(m.group(2))
-            return (depth, f'{marker} {content}')
-    m = re.match(r'^[-*]\s+(.*)', stripped)
-    if m:
-        return (0, '• ' + _clean_inline(m.group(1)))
-    return None
+    return detect_official_list_item(line, _clean_inline)
+
+
+_ATTACHMENT_HEAD_PATTERN = re.compile(r'^붙임\s*[::]?\s+(\S.*)$')
+_ATTACHMENT_ITEM_PATTERN = re.compile(r'^\d{1,2}\.\s+.*\d+\s*(?:부|매|장|권|개|식|건)\.?\s*$')
+
+
+def _detect_attachment_head(line):
+    """'붙임  1. ○○계획서 1부.' 형식 감지 → 붙임 뒤 2타로 정규화."""
+    match = _ATTACHMENT_HEAD_PATTERN.match(line.strip())
+    if match is None:
+        return None
+    return {'type': 'attachment', 'text': '붙임  ' + match.group(1).strip()}
+
+
+def _bullet_depth(raw_line, last_official_depth, heading_level=0):
+    """공문서 위계: 불릿(•)은 직전 항목기호의 한 단계 하위 들여쓰기를 따른다.
+
+    마크다운 들여쓰기(2칸 = 1단계)는 추가 하위 단계로 누적된다.
+    직전 항목기호가 없으면 제목 수준 → 기본값(1) 순서로 기준을 잡는다.
+    """
+    expanded = raw_line.replace('\t', '  ')
+    indent_levels = (len(expanded) - len(expanded.lstrip(' '))) // 2
+    if last_official_depth is not None:
+        base = last_official_depth + 1
+    elif heading_level > 0:
+        base = heading_level
+    else:
+        base = 1
+    return min(base + indent_levels, OFFICIAL_LIST_MAX_DEPTH)
 
 
 def parse_markdown(text):
@@ -127,11 +214,15 @@ def parse_markdown(text):
     blocks = []
     i = 0
     in_front = False
+    current_heading_level = 0  # tracks last seen # heading depth
+    last_official_depth = None  # depth of the most recent official-numbered list item
+    in_attachment = False  # 붙임 목록 연속 항목 추적
 
     while i < len(lines):
         line = lines[i]
 
         if not line.strip():
+            in_attachment = False
             i += 1
             continue
 
@@ -153,6 +244,20 @@ def parse_markdown(text):
             i += 1
             continue
 
+        # 붙임 표시 (시행규칙 제4조제4항): 첫 줄 '붙임  1. …', 이후 '2. ○○ 1부.' 연속 항목
+        attachment = _detect_attachment_head(line)
+        if attachment:
+            in_attachment = True
+            blocks.append(attachment)
+            i += 1
+            continue
+        if in_attachment:
+            if _ATTACHMENT_ITEM_PATTERN.match(line.strip()):
+                blocks.append({'type': 'attachment', 'text': line.strip(), 'cont': True})
+                i += 1
+                continue
+            in_attachment = False
+
         stripped_line = line.strip()
 
         if re.match(r'^(수신|경유|제목)\s*:', stripped_line):
@@ -170,7 +275,24 @@ def parse_markdown(text):
 
         m = re.match(r'^(#{1,3})\s+(.*)', line)
         if m:
-            blocks.append({'type': 'h', 'level': len(m.group(1)), 'text': _clean_inline(m.group(2))})
+            heading_level = len(m.group(1))
+            heading_text = m.group(2)
+            current_heading_level = heading_level
+            # Convert headings whose text matches official Korean numbering (1. 가. etc.) to list items.
+            # Plain headings (no numbered prefix) remain as h blocks.
+            li_result = _detect_list_item(heading_text)
+            if li_result and li_result['marker'] != '•':
+                last_official_depth = li_result['depth']
+                blocks.append({
+                    'type': 'li',
+                    'text': li_result['text'],
+                    'depth': li_result['depth'],
+                    'marker': li_result['marker'],
+                    'content': li_result['content'],
+                })
+            else:
+                last_official_depth = None
+                blocks.append({'type': 'h', 'level': heading_level, 'text': _clean_inline(heading_text)})
             i += 1
             continue
 
@@ -181,13 +303,24 @@ def parse_markdown(text):
             while i < len(lines) and lines[i].strip().startswith('|'):
                 rows.append(_parse_table_row(lines[i]))
                 i += 1
+            header, rows = _normalize_parsed_table(header, rows)
             blocks.append({'type': 'table', 'header': header, 'rows': rows})
             continue
 
         li_result = _detect_list_item(line)
         if li_result:
-            depth, text = li_result
-            blocks.append({'type': 'li', 'text': text, 'depth': depth})
+            depth = li_result['depth']
+            if li_result['marker'] == '•':
+                depth = _bullet_depth(line, last_official_depth, current_heading_level)
+            else:
+                last_official_depth = depth
+            blocks.append({
+                'type': 'li',
+                'text': li_result['text'],
+                'depth': depth,
+                'marker': li_result['marker'],
+                'content': li_result['content'],
+            })
             i += 1
             continue
 
@@ -218,18 +351,98 @@ def parse_markdown(text):
     return blocks
 
 
+def _split_tab_row(line):
+    return [cell.strip() for cell in line.rstrip('\n').split('\t')]
+
+
+def _tab_table_run(lines, start):
+    """start부터 탭 구분 표 행이 몇 줄 이어지는지 센다 (2열 이상, 2줄 이상)."""
+    count = 0
+    while start + count < len(lines):
+        line = lines[start + count]
+        if '\t' not in line or len(_split_tab_row(line)) < 2 or not line.strip():
+            break
+        count += 1
+    return count if count >= 2 else 0
+
+
+def _pipe_table_run(lines, start):
+    """start부터 파이프(|) 표 행이 몇 줄 이어지는지 센다 (2줄 이상)."""
+    count = 0
+    while start + count < len(lines) and lines[start + count].strip().startswith('|'):
+        count += 1
+    return count if count >= 2 else 0
+
+
 def parse_plain_text(text):
+    lines = text.splitlines()
     blocks = []
-    for raw_line in text.splitlines():
+    last_official_depth = None
+    in_attachment = False
+    i = 0
+    while i < len(lines):
+        raw_line = lines[i]
         line = raw_line.strip()
         if not line:
+            in_attachment = False
+            i += 1
             continue
+
+        # 표 구조 보존: 탭 구분 표 (TSV 형태)
+        tab_run = _tab_table_run(lines, i)
+        if tab_run:
+            rows = [_split_tab_row(lines[i + k]) for k in range(tab_run)]
+            header, body = _normalize_parsed_table(rows[0], rows[1:])
+            blocks.append({'type': 'table', 'header': header, 'rows': body})
+            i += tab_run
+            continue
+
+        # 표 구조 보존: 파이프(|) 구분 표
+        pipe_run = _pipe_table_run(lines, i)
+        if pipe_run:
+            table_lines = [lines[i + k] for k in range(pipe_run)]
+            if len(table_lines) >= 2 and _is_separator(table_lines[1]):
+                header = _parse_table_row(table_lines[0])
+                body_rows = [_parse_table_row(ln) for ln in table_lines[2:]]
+            else:
+                header = _parse_table_row(table_lines[0])
+                body_rows = [_parse_table_row(ln) for ln in table_lines[1:]]
+            header, body_rows = _normalize_parsed_table(header, body_rows)
+            blocks.append({'type': 'table', 'header': header, 'rows': body_rows})
+            i += pipe_run
+            continue
+
+        # 붙임 표시 (시행규칙 제4조제4항)
+        attachment = _detect_attachment_head(line)
+        if attachment:
+            in_attachment = True
+            blocks.append(attachment)
+            i += 1
+            continue
+        if in_attachment:
+            if _ATTACHMENT_ITEM_PATTERN.match(line):
+                blocks.append({'type': 'attachment', 'text': line, 'cont': True})
+                i += 1
+                continue
+            in_attachment = False
+
         li_result = _detect_list_item(line)
         if li_result:
-            depth, item_text = li_result
-            blocks.append({'type': 'li', 'text': item_text, 'depth': depth})
+            depth = li_result['depth']
+            if li_result['marker'] == '•':
+                depth = _bullet_depth(raw_line, last_official_depth)
+            else:
+                last_official_depth = depth
+            blocks.append({
+                'type': 'li',
+                'text': li_result['text'],
+                'depth': depth,
+                'marker': li_result['marker'],
+                'content': li_result['content'],
+            })
         else:
             blocks.append({'type': 'p', 'text': _clean_inline(line)})
+        i += 1
     return blocks
 
 
@@ -333,6 +546,279 @@ def parse_xlsx(path):
         wb.close()
 
 
+def _odl_cell_text(cell):
+    """tableCell.kids에서 텍스트를 추출하여 하나의 문자열로 반환."""
+    parts = _odl_collect_text_parts(cell)
+    return " ".join(parts)
+
+
+def _odl_collect_text_parts(element):
+    parts = []
+    content = element.get("content", "").strip()
+    if content:
+        parts.append(content)
+    for kid in element.get("kids", []):
+        parts.extend(_odl_collect_text_parts(kid))
+    for item in element.get("list items", []):
+        item_content = item.get("content", "").strip()
+        if item_content:
+            parts.append(item_content)
+        for kid in item.get("kids", []):
+            parts.extend(_odl_collect_text_parts(kid))
+    return parts
+
+
+def _odl_table_grid(element):
+    """ODL 셀 좌표(row/column number, span)로 원본 표 격자를 복원.
+
+    병합 셀(rowspan/colspan)은 앵커 위치에만 내용을 두고 병합 범위는
+    빈 칸으로 유지해 열 밀림을 방지한다. 좌표 정보가 없는 구버전 JSON은
+    기존 순서 기반 배열로 폴백.
+
+    Returns:
+        (grid, merges) — merges는 (row, col, row_span, col_span) 목록.
+        행·열 인덱스는 헤더 포함 0부터 시작하며, 빈 행 제거 후 좌표로 보정됨.
+    """
+    rows = element.get("rows", [])
+    flat = [cell for row in rows for cell in (row.get("cells") or [])]
+    if not flat:
+        return [], []
+    has_coords = all(
+        isinstance(cell.get("row number"), int) and isinstance(cell.get("column number"), int)
+        for cell in flat
+    )
+    if not has_coords:
+        grid = []
+        for row in rows:
+            texts = [_odl_cell_text(cell) for cell in (row.get("cells") or [])]
+            if any(texts):
+                grid.append(texts)
+        return grid, []
+    n_rows = max(cell["row number"] for cell in flat)
+    n_cols = max(cell["column number"] + cell.get("column span", 1) - 1 for cell in flat)
+    grid = [[''] * n_cols for _ in range(n_rows)]
+    merges = []
+    for cell in flat:
+        r = cell["row number"] - 1
+        c = cell["column number"] - 1
+        grid[r][c] = _odl_cell_text(cell)
+        row_span = max(int(cell.get("row span", 1) or 1), 1)
+        col_span = max(int(cell.get("column span", 1) or 1), 1)
+        if row_span > 1 or col_span > 1:
+            merges.append((r, c, row_span, col_span))
+
+    # 빈 행 제거 + 병합 좌표 보정
+    kept = [ri for ri, row in enumerate(grid) if any(cell.strip() for cell in row)]
+    if len(kept) == len(grid):
+        return grid, merges
+    new_index = {old: new for new, old in enumerate(kept)}
+    remapped = []
+    for r, c, row_span, col_span in merges:
+        if r not in new_index:
+            continue
+        span_kept = sum(1 for ri in range(r, r + row_span) if ri in new_index)
+        remapped.append((new_index[r], c, max(span_kept, 1), col_span))
+    return [grid[ri] for ri in kept], remapped
+
+
+def _odl_element_to_blocks(element):
+    """opendataloader-pdf JSON element 하나를 내부 blocks 리스트로 변환."""
+    blocks = []
+    etype = element.get("type", "")
+
+    if etype == "heading":
+        level = min(max(int(element.get("heading level", 1)), 1), 3)
+        content = element.get("content", "").strip()
+        if content:
+            blocks.append({"type": "h", "level": level, "text": content})
+
+    elif etype in ("paragraph", "caption"):
+        content = element.get("content", "").strip()
+        if content:
+            blocks.append({"type": "p", "text": content})
+
+    elif etype == "table":
+        grid, merges = _odl_table_grid(element)
+        if grid:
+            blocks.append({"type": "table", "header": grid[0], "rows": grid[1:], "merges": merges})
+
+    elif etype == "list":
+        for item in element.get("list items", []):
+            content = item.get("content", "").strip()
+            if content:
+                blocks.append({"type": "li", "text": content, "depth": 0})
+            for child in item.get("kids", []):
+                blocks.extend(_odl_element_to_blocks(child))
+
+    elif etype == "text block":
+        for child in element.get("kids", []):
+            blocks.extend(_odl_element_to_blocks(child))
+
+    # image / header / footer → 무시
+    return blocks
+
+
+def _odl_data_to_blocks(data):
+    """opendataloader-pdf JSON 최상위 객체 전체를 blocks 리스트로 변환."""
+    blocks = []
+    for element in data.get("kids", []):
+        blocks.extend(_odl_element_to_blocks(element))
+    return blocks
+
+
+def extract_pdf_blocks_odl(path):
+    """opendataloader-pdf로 PDF를 JSON 추출하여 구조화된 blocks를 반환.
+
+    Java 또는 opendataloader_pdf 패키지가 없으면 RuntimeError를 발생시킨다.
+    """
+    try:
+        import opendataloader_pdf
+    except ImportError as exc:
+        raise RuntimeError(f"opendataloader_pdf 패키지 없음: {exc}") from exc
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            opendataloader_pdf.convert(
+                input_path=[str(path)],
+                output_dir=tmpdir,
+                format="json",
+            )
+        except Exception as exc:
+            raise RuntimeError(f"opendataloader-pdf 변환 실패: {exc}") from exc
+
+        json_files = sorted(Path(tmpdir).glob("*.json"))
+        if not json_files:
+            raise RuntimeError("opendataloader-pdf: JSON 출력 파일을 찾을 수 없음")
+
+        data = json.loads(json_files[0].read_text(encoding="utf-8"))
+
+    blocks = _odl_data_to_blocks(data)
+    if not blocks:
+        raise RuntimeError("opendataloader-pdf: 추출된 blocks가 없음")
+    return blocks
+
+
+def _pdfplumber_clean_cell(value):
+    if value is None:
+        return ''
+    text = re.sub(r'\s+', ' ', str(value).replace('\n', ' '))
+    return _clean_inline(text)
+
+
+def _pdfplumber_table_to_block(table_rows):
+    rows = []
+    for raw_row in table_rows or []:
+        row = [_pdfplumber_clean_cell(cell) for cell in (raw_row or [])]
+        if any(row):
+            rows.append(row)
+    if not rows:
+        return None
+    header, body = _normalize_parsed_table(rows[0], rows[1:])
+    return {'type': 'table', 'header': header, 'rows': body}
+
+
+def _word_number(word, key):
+    try:
+        return float(word.get(key, 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _word_center_y(word):
+    return (_word_number(word, 'top') + _word_number(word, 'bottom')) / 2
+
+
+def _word_inside_bbox(word, bbox):
+    x = (_word_number(word, 'x0') + _word_number(word, 'x1')) / 2
+    y = _word_center_y(word)
+    left, top, right, bottom = bbox
+    return left <= x <= right and top <= y <= bottom
+
+
+def _words_in_vertical_band(words, top, bottom, table_bboxes):
+    band_words = []
+    for word in words:
+        y = _word_center_y(word)
+        if y < top or y >= bottom:
+            continue
+        if any(_word_inside_bbox(word, bbox) for bbox in table_bboxes):
+            continue
+        band_words.append(word)
+    return band_words
+
+
+def _pdfplumber_words_to_text(words):
+    lines = []
+    current_line = []
+    current_top = None
+    for word in sorted(words, key=lambda item: (_word_number(item, 'top'), _word_number(item, 'x0'))):
+        text = str(word.get('text', '')).strip()
+        if not text:
+            continue
+        top = _word_number(word, 'top')
+        if current_top is None or abs(top - current_top) <= 4:
+            current_line.append(text)
+            current_top = top if current_top is None else current_top
+            continue
+        lines.append(' '.join(current_line))
+        current_line = [text]
+        current_top = top
+    if current_line:
+        lines.append(' '.join(current_line))
+    return '\n'.join(lines)
+
+
+def _pdfplumber_page_to_blocks(page):
+    table_items = []
+    for table in page.find_tables() or []:
+        block = _pdfplumber_table_to_block(table.extract())
+        if block:
+            table_items.append((table.bbox, block))
+    table_items.sort(key=lambda item: item[0][1])
+
+    if not table_items:
+        page_text = page.extract_text() or ''
+        if page_text.strip():
+            return parse_markdown(page_text)
+
+    words = page.extract_words() or []
+    table_bboxes = [bbox for bbox, _ in table_items]
+    blocks = []
+    cursor = 0.0
+    for bbox, block in table_items:
+        text = _pdfplumber_words_to_text(_words_in_vertical_band(words, cursor, bbox[1], table_bboxes))
+        if text.strip():
+            blocks.extend(parse_plain_text(text))
+        blocks.append(block)
+        cursor = max(cursor, bbox[3])
+
+    text = _pdfplumber_words_to_text(_words_in_vertical_band(words, cursor, float('inf'), table_bboxes))
+    if text.strip():
+        blocks.extend(parse_plain_text(text))
+    if blocks:
+        return blocks
+
+    return []
+
+
+def extract_pdf_blocks_pdfplumber(path):
+    try:
+        import pdfplumber
+    except ImportError as exc:
+        raise RuntimeError(f'pdfplumber 없음: {exc}') from exc
+
+    blocks = []
+    try:
+        with pdfplumber.open(str(path)) as pdf:
+            for page in pdf.pages:
+                blocks.extend(_pdfplumber_page_to_blocks(page))
+    except Exception as exc:
+        raise RuntimeError(f'pdfplumber 구조 추출 실패: {exc}') from exc
+    if not blocks:
+        raise RuntimeError('pdfplumber: 추출된 blocks가 없음')
+    return blocks
+
+
 def try_kordoc_pdf_text(path, kordoc_home=None):
     kordoc_dir = resolve_kordoc_dir(kordoc_home)
     if kordoc_dir is None:
@@ -348,6 +834,7 @@ def try_kordoc_pdf_text(path, kordoc_home=None):
                 errors='replace',
                 timeout=120,
                 check=False,
+                env=_utf8_subprocess_env(),
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
@@ -412,12 +899,32 @@ def extract_pdf_text_fallback(path):
 
 
 def parse_pdf(path, kordoc_home=None):
+    try:
+        return extract_pdf_blocks_odl(path)
+    except Exception as odl_exc:
+        _odl_warn = str(odl_exc)
+
+    try:
+        return extract_pdf_blocks_pdfplumber(path)
+    except RuntimeError as plumber_exc:
+        _plumber_warn = str(plumber_exc)
+
     text = try_kordoc_pdf_text(path, kordoc_home=kordoc_home)
+
     if text is None:
-        text = extract_pdf_text_fallback(path)
+        try:
+            text = extract_pdf_text_fallback(path)
+        except RuntimeError as fb_exc:
+            raise RuntimeError(
+                f'PDF 텍스트 추출 실패.\n'
+                f'  opendataloader-pdf: {_odl_warn}\n'
+                f'  pdfplumber 구조 추출: {_plumber_warn}\n'
+                f'  fallback: {fb_exc}'
+            ) from fb_exc
+
     if not text.strip():
         raise RuntimeError(f'PDF에서 텍스트를 추출하지 못함: {path}')
-    return parse_plain_text(text)
+    return parse_markdown(text)
 
 
 # ─── DOCX 파서 ─────────────────────────────────────────────────────────────────
@@ -564,6 +1071,27 @@ def format_hwp_startup_error(exc):
     )
 
 
+try:
+    import pywintypes as _pywintypes
+    _COM_ERROR = _pywintypes.com_error
+except ImportError:
+    _COM_ERROR = None
+
+
+def _com_call(fn, retries=3, delay=1.0):
+    """Retry a callable on transient pywintypes.com_error (Windows COM instability)."""
+    if _COM_ERROR is None:
+        return fn()
+    for attempt in range(retries):
+        try:
+            return fn()
+        except _COM_ERROR:
+            if attempt < retries - 1:
+                time.sleep(delay)
+            else:
+                raise
+
+
 def create_hwp_object(visible=True):
     try:
         import win32com.client
@@ -609,6 +1137,7 @@ def run_hwp_preflight(visible=False, timeout=45):
             errors='replace',
             timeout=timeout,
             check=False,
+            env=_utf8_subprocess_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f'HWP COM preflight timed out after {timeout} seconds.') from exc
@@ -630,6 +1159,12 @@ def break_para(hwp):
     hwp.HAction.Run('BreakPara')
 
 
+def _blank_line(hwp):
+    set_para_shape(hwp, align=0)
+    set_char_shape(hwp, height=1300, font='body')
+    break_para(hwp)
+
+
 def set_char_shape(hwp, height=1300, bold=False, italic=False, font='body'):
     face_hangul = '휴먼명조' if font == 'body' else '맑은 고딕'
     face_latin = 'Arial'
@@ -649,281 +1184,13 @@ def set_para_shape(hwp, align=0, space_before=0, space_after=0, indent_left=0, i
     pset = act.CreateSet()
     act.GetDefault(pset)
     pset.SetItem('Align', align)
-    pset.SetItem('SpaceBefore', space_before)
-    pset.SetItem('SpaceAfter', space_after)
-    pset.SetItem('IndentLeft', indent_left)
-    pset.SetItem('IndentFirst', indent_first)
+    # SpaceBefore/SpaceAfter: silently ignored by HWP COM — handled via XML post-processing if needed
+    # LeftMargin works with 0.5× ratio (COM LeftMargin=X → hp:case hc:left=X/2)
+    # Pass indent_left×2 so that hp:case stores indent_left exactly
+    if indent_left:
+        pset.SetItem('LeftMargin', indent_left * 2)
+    # IndentFirst has no COM equivalent — apply_list_hanging_indents handles hc:intent post-processing
     act.Execute(pset)
-
-
-# ─── 표 레이아웃 산정 ─────────────────────────────────────────────────────────
-
-TABLE_TOTAL_WIDTH = 14000
-TABLE_MIN_ROW_HEIGHT = 900
-TABLE_LINE_HEIGHT = 620
-TABLE_CELL_VPAD = 260
-TABLE_CELL_HPAD = 240
-TABLE_UNIT_PER_VISUAL = 135
-
-TABLE_HEADER_WIDTH_PROFILES = {
-    ('구분', '내용'): [25, 75],
-    ('구분', '주요 내용'): [25, 75],
-    ('방향', '내용'): [25, 75],
-    ('판단 사항', '검토 내용'): [30, 70],
-    ('기관·부서', '역할'): [30, 70],
-    ('번호', '문항', '유형'): [10, 75, 15],
-    ('시간', '내용', '담당'): [20, 60, 20],
-    ('단계', '내용', '시기'): [18, 62, 20],
-    ('구분', '인원', '역할'): [20, 15, 65],
-}
-
-TABLE_DEFAULT_WIDTH_PROFILES = {
-    2: [28, 72],
-    3: [18, 62, 20],
-    4: [15, 35, 25, 25],
-}
-
-COLUMN_PROFILES = {
-    'index': {'min': 650, 'pref': 850, 'max': 1100, 'weight': 0.3},
-    'number': {'min': 900, 'pref': 1300, 'max': 1900, 'weight': 0.6},
-    'date': {'min': 1200, 'pref': 1700, 'max': 2300, 'weight': 0.7},
-    'name': {'min': 850, 'pref': 1200, 'max': 1700, 'weight': 0.5},
-    'position': {'min': 1000, 'pref': 1500, 'max': 2200, 'weight': 0.6},
-    'org': {'min': 1600, 'pref': 2500, 'max': 3600, 'weight': 1.0},
-    'title': {'min': 1700, 'pref': 2800, 'max': 4200, 'weight': 1.2},
-    'detail': {'min': 2200, 'pref': 4300, 'max': 8200, 'weight': 2.3},
-    'generic': {'min': 1200, 'pref': 1900, 'max': 3200, 'weight': 1.0},
-}
-
-DETAIL_HEADER_PATTERN = re.compile(
-    r'(내용|세부|비고|사유|설명|의견|주소|목적|방법|추진|계획|결과|특이|주요|개요|'
-    r'remark|note|description|detail|comment)',
-    re.IGNORECASE,
-)
-ORG_HEADER_PATTERN = re.compile(r'(기관|학교|부서|소속|단체|업체|교육청|지원청|org|organization|department)', re.IGNORECASE)
-TITLE_HEADER_PATTERN = re.compile(r'(명칭|제목|사업명|프로그램명|과정명|행사명|title|subject)', re.IGNORECASE)
-VALUE_HEADER_PATTERN = re.compile(r'^(값|내용|value)$', re.IGNORECASE)
-POSITION_HEADER_PATTERN = re.compile(r'(직위|직급|직책|보직|담당|role|position|rank)', re.IGNORECASE)
-NAME_HEADER_PATTERN = re.compile(r'(성명|이름|성함|신청자|담당자|name)', re.IGNORECASE)
-DATE_HEADER_PATTERN = re.compile(r'(일자|날짜|기간|시간|시각|연도|월일|date|time|period)', re.IGNORECASE)
-NUMBER_HEADER_PATTERN = re.compile(r'(금액|예산|단가|합계|수량|인원|계|원|명|건|회|비율|%|amount|price|total|count|number)', re.IGNORECASE)
-INDEX_HEADER_PATTERN = re.compile(r'^(순번|연번|번호|no\.?|#)$', re.IGNORECASE)
-NUMBER_VALUE_PATTERN = re.compile(r'^\s*[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:원|명|건|회|%|개|점)?\s*$')
-DATE_VALUE_PATTERN = re.compile(r'^\s*\d{2,4}[./-]\d{1,2}(?:[./-]\d{1,2})?(?:\s*[-~]\s*\d{1,2}[./-]\d{1,2})?\s*$')
-
-def _visual_width(text):
-    w = 0
-    for ch in str(text or ''):
-        if unicodedata.combining(ch):
-            continue
-        if unicodedata.east_asian_width(ch) in ('F', 'W'):
-            w += 2
-        else:
-            w += 1
-    return max(w, 1)
-
-
-def _normalize_table_rows(header, rows):
-    all_rows = ([header] if header else []) + (rows if rows else [])
-    n = max((len(row) for row in all_rows), default=0)
-    normalized = []
-    for row in all_rows:
-        values = [str(cell or '').strip() for cell in row]
-        normalized.append(values + [''] * (n - len(values)))
-    return normalized, n
-
-
-def _percentile(values, ratio):
-    if not values:
-        return 1
-    ordered = sorted(values)
-    idx = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * ratio) - 1))
-    return ordered[idx]
-
-
-def _infer_col_kind(header_text, values, col_index):
-    header_text = str(header_text or '').strip()
-    body_values = [str(v or '').strip() for v in values if str(v or '').strip()]
-    if INDEX_HEADER_PATTERN.search(header_text):
-        return 'index'
-    if VALUE_HEADER_PATTERN.search(header_text):
-        return 'detail'
-    if DETAIL_HEADER_PATTERN.search(header_text):
-        return 'detail'
-    if ORG_HEADER_PATTERN.search(header_text):
-        return 'org'
-    if TITLE_HEADER_PATTERN.search(header_text):
-        return 'title'
-    if POSITION_HEADER_PATTERN.search(header_text):
-        return 'position'
-    if NAME_HEADER_PATTERN.search(header_text):
-        return 'name'
-    if DATE_HEADER_PATTERN.search(header_text):
-        return 'date'
-    if NUMBER_HEADER_PATTERN.search(header_text):
-        return 'number'
-    if col_index == 0 and body_values and all(_visual_width(v) <= 4 for v in body_values):
-        return 'index'
-    if body_values:
-        numeric_hits = sum(1 for v in body_values if NUMBER_VALUE_PATTERN.match(v))
-        date_hits = sum(1 for v in body_values if DATE_VALUE_PATTERN.match(v))
-        if numeric_hits / len(body_values) >= 0.75:
-            return 'number'
-        if date_hits / len(body_values) >= 0.6:
-            return 'date'
-        widths = [_visual_width(v) for v in body_values]
-        avg_width = sum(widths) / len(widths)
-        p90_width = _percentile(widths, 0.9)
-        if p90_width >= 28 or avg_width >= 18:
-            return 'detail'
-        if avg_width <= 8 and all(' ' not in v for v in body_values[:10]):
-            return 'name'
-    return 'generic'
-
-
-def _content_preferred_width(kind, header_text, values):
-    widths = [_visual_width(header_text)]
-    widths.extend(_visual_width(v) for v in values if str(v or '').strip())
-    p90 = _percentile(widths, 0.9)
-    longest = max(widths or [1])
-    if kind == 'detail':
-        visual_units = min(max(p90, 18), 42)
-    elif kind in ('org', 'title'):
-        visual_units = min(max(p90, 12), 28)
-    elif kind in ('number', 'date', 'position'):
-        visual_units = min(max(longest, 7), 18)
-    elif kind == 'index':
-        visual_units = min(max(longest, 3), 6)
-    else:
-        visual_units = min(max(p90, 8), 22)
-    return int(visual_units * TABLE_UNIT_PER_VISUAL + TABLE_CELL_HPAD)
-
-
-def _redistribute_widths(widths, kinds, total):
-    if not widths:
-        return []
-    profiles = [COLUMN_PROFILES[k] for k in kinds]
-    min_sum = sum(p['min'] for p in profiles)
-    if min_sum >= total:
-        result = [max(1, int(total * p['min'] / min_sum)) for p in profiles]
-    else:
-        result = widths[:]
-
-    overflow = sum(result) - total
-    if overflow > 0:
-        shrink_room = [max(0, result[i] - profiles[i]['min']) for i in range(len(result))]
-        room_sum = sum(shrink_room)
-        if room_sum > 0:
-            for i, room in enumerate(shrink_room):
-                cut = min(room, int(overflow * room / room_sum))
-                result[i] -= cut
-            overflow = sum(result) - total
-        while overflow > 0:
-            i = max(range(len(result)), key=lambda idx: result[idx] - profiles[idx]['min'])
-            if result[i] <= profiles[i]['min']:
-                break
-            result[i] -= 1
-            overflow -= 1
-    else:
-        extra = total - sum(result)
-        weights = [
-            profiles[i]['weight'] * max(0.25, profiles[i]['max'] - result[i])
-            for i in range(len(result))
-        ]
-        weight_sum = sum(weights)
-        if weight_sum > 0:
-            for i, weight in enumerate(weights):
-                add = min(profiles[i]['max'] - result[i], int(extra * weight / weight_sum))
-                result[i] += max(add, 0)
-            extra = total - sum(result)
-        while extra > 0:
-            growable = [i for i, p in enumerate(profiles) if result[i] < p['max']]
-            if not growable:
-                break
-            i = max(growable, key=lambda idx: profiles[idx]['weight'])
-            result[i] += 1
-            extra -= 1
-        if extra > 0:
-            soft_weights = [p['weight'] for p in profiles]
-            soft_sum = sum(soft_weights) or len(result)
-            for i, weight in enumerate(soft_weights):
-                add = int(extra * weight / soft_sum)
-                result[i] += add
-            extra = total - sum(result)
-            for i in range(extra):
-                result[i % len(result)] += 1
-
-    diff = total - sum(result)
-    if diff:
-        target = max(range(len(result)), key=lambda idx: profiles[idx]['weight'])
-        result[target] += diff
-    return result
-
-
-def _profile_to_widths(profile, total=TABLE_TOTAL_WIDTH):
-    if not profile:
-        return []
-    width_sum = sum(profile)
-    if width_sum <= 0:
-        return []
-    widths = [max(1, int(total * value / width_sum)) for value in profile]
-    diff = total - sum(widths)
-    if diff:
-        target = max(range(len(widths)), key=lambda idx: profile[idx])
-        widths[target] += diff
-    return widths
-
-
-def _table_header_profile(header, col_count):
-    normalized_header = tuple(str(cell or '').strip() for cell in (header or []))
-    if normalized_header in TABLE_HEADER_WIDTH_PROFILES:
-        return TABLE_HEADER_WIDTH_PROFILES[normalized_header]
-    if col_count in TABLE_DEFAULT_WIDTH_PROFILES:
-        return TABLE_DEFAULT_WIDTH_PROFILES[col_count]
-    return None
-
-
-def calc_col_widths(header, rows, total=TABLE_TOTAL_WIDTH):
-    normalized, n = _normalize_table_rows(header or [], rows or [])
-    if n == 0:
-        return []
-    if n == 1:
-        return [total]
-    profile = _table_header_profile(header or [], n)
-    if profile and len(profile) == n:
-        return _profile_to_widths(profile, total)
-    kinds = []
-    preferred = []
-    for ci in range(n):
-        header_text = normalized[0][ci] if header else ''
-        values = [row[ci] for row in normalized[1 if header else 0:]]
-        kind = _infer_col_kind(header_text, values, ci)
-        profile = COLUMN_PROFILES[kind]
-        content_width = _content_preferred_width(kind, header_text, values)
-        kinds.append(kind)
-        preferred.append(max(profile['min'], min(profile['max'], max(profile['pref'], content_width))))
-    return _redistribute_widths(preferred, kinds, total)
-
-
-def calc_row_heights(header, rows, col_widths):
-    normalized, n = _normalize_table_rows(header or [], rows or [])
-    if not normalized or not col_widths:
-        return []
-    heights = []
-    for row in normalized:
-        max_lines = 1
-        for ci in range(n):
-            text = row[ci]
-            if not text:
-                continue
-            usable_width = max(300, col_widths[min(ci, len(col_widths) - 1)] - TABLE_CELL_HPAD)
-            capacity = max(2, int(usable_width / TABLE_UNIT_PER_VISUAL))
-            visual_lines = 0
-            for part in str(text).splitlines() or ['']:
-                visual_lines += max(1, math.ceil(_visual_width(part) / capacity))
-            max_lines = max(max_lines, visual_lines)
-        heights.append(max(TABLE_MIN_ROW_HEIGHT, TABLE_CELL_VPAD + max_lines * TABLE_LINE_HEIGHT))
-    return heights
 
 
 def _rewrite_zip_entry(zip_path, entry_name, data):
@@ -948,8 +1215,319 @@ def _rewrite_zip_entry(zip_path, entry_name, data):
             os.remove(tmp_name)
 
 
-def apply_table_width_profiles(hwpx_path, table_headers):
-    if not table_headers or not os.path.exists(hwpx_path):
+def _hp_tag(name):
+    return f'{{http://www.hancom.co.kr/hwpml/2011/paragraph}}{name}'
+
+
+def _int_attr(element, name, default=0):
+    try:
+        return int(element.attrib.get(name, default) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_table_layout(layout):
+    if isinstance(layout, dict):
+        return layout.get('header') or [], layout.get('rows') or []
+    return layout or [], []
+
+
+def _ensure_child(parent, tag_name):
+    tag = _hp_tag(tag_name)
+    child = parent.find(tag)
+    if child is None:
+        child = ET.SubElement(parent, tag)
+    return child
+
+
+def _set_attrs(element, attrs):
+    changed = False
+    for key, value in attrs.items():
+        value = str(value)
+        if element.attrib.get(key) != value:
+            element.set(key, value)
+            changed = True
+    return changed
+
+
+def _apply_table_cell_margin(tbl, attrs):
+    margin = _ensure_child(tbl, 'cellMargin')
+    return _set_attrs(margin, attrs)
+
+
+def _compact_cell_paragraphs(tc, attrs):
+    changed = False
+    for para in tc.findall('.//hp:p', {'hp': 'http://www.hancom.co.kr/hwpml/2011/paragraph'}):
+        para_pr = _ensure_child(para, 'paraPr')
+        changed = _set_attrs(para_pr, attrs) or changed
+    return changed
+
+
+def _iter_parent_child_pairs(root):
+    for parent in root.iter():
+        for child in list(parent):
+            yield parent, child
+
+
+def _compact_paragraph_after_table(root, tbl, attrs):
+    for parent, child in _iter_parent_child_pairs(root):
+        if child is not tbl:
+            continue
+        siblings = list(parent)
+        idx = siblings.index(child)
+        for next_sibling in siblings[idx + 1:]:
+            if next_sibling.tag == _hp_tag('p'):
+                para_pr = _ensure_child(next_sibling, 'paraPr')
+                return _set_attrs(para_pr, attrs)
+        return False
+    return False
+
+
+# hc:left in hp:case (HwpUnitChar) → hc:intent
+# Section markers and bullets diverge at depths 2, 4, 6 — both sets included.
+_LIST_CASE_LEFT_TO_INTENT = {
+    620:  -620,  # depth=0  Ⅰ. / •
+    900:  -540,  # depth=1  1~9. / •
+    960:  -600,  # depth=1  wide: 10.+ or 가.(depth=1 context)
+    1260: -540,  # depth=2  •
+    1320: -600,  # depth=2  가.
+    1620: -540,  # depth=3  1) / •
+    1980: -540,  # depth=4  •
+    2040: -600,  # depth=4  가)
+    2400: -600,  # depth=5  (1) / •
+    2760: -600,  # depth=6  •
+    2880: -720,  # depth=6  (가)
+    3060: -540,  # depth=7  ① / •
+    3420: -540,  # depth=8  ㉮ / •
+}
+# hp:default stores 2× values (standard HWPUNIT, not HwpUnitChar)
+_LIST_DEFAULT_LEFT_TO_INTENT = {k * 2: v * 2 for k, v in _LIST_CASE_LEFT_TO_INTENT.items()}
+
+_NS_HH = 'http://www.hancom.co.kr/hwpml/2011/head'
+_NS_HP = 'http://www.hancom.co.kr/hwpml/2011/paragraph'
+_NS_HC = 'http://www.hancom.co.kr/hwpml/2011/core'
+
+
+def apply_list_hanging_indents(hwpx_path):
+    """Post-process header.xml: set hc:intent for list paragraph styles created by set_para_shape."""
+    if not os.path.exists(hwpx_path):
+        return
+    header_name = 'Contents/header.xml'
+    try:
+        with zipfile.ZipFile(hwpx_path, 'r') as zf:
+            header_xml = zf.read(header_name)
+        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', header_xml[:4096]):
+            ET.register_namespace(prefix.decode(), uri.decode())
+        root = ET.fromstring(header_xml)
+        changed = False
+        for para_pr in root.iter(f'{{{_NS_HH}}}paraPr'):
+            for switch in para_pr.iter(f'{{{_NS_HP}}}switch'):
+                for block in switch:
+                    margin = block.find(f'{{{_NS_HH}}}margin')
+                    if margin is None:
+                        continue
+                    left_elem = margin.find(f'{{{_NS_HC}}}left')
+                    intent_elem = margin.find(f'{{{_NS_HC}}}intent')
+                    if left_elem is None or intent_elem is None:
+                        continue
+                    left_val = int(left_elem.get('value', '0'))
+                    is_case = block.tag == f'{{{_NS_HP}}}case'
+                    lookup = _LIST_CASE_LEFT_TO_INTENT if is_case else _LIST_DEFAULT_LEFT_TO_INTENT
+                    if left_val in lookup:
+                        new_intent = str(lookup[left_val])
+                        if intent_elem.get('value') != new_intent:
+                            intent_elem.set('value', new_intent)
+                            changed = True
+        if not changed:
+            return
+        _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
+    except Exception as e:
+        print(f'[경고] 목록 내어쓰기 후처리 실패: {e}', file=sys.stderr)
+
+
+# 페이지 여백 (HWPX_작성규칙 7-2): 상 25 / 하 20 / 좌우 25 / 머리말·꼬리말 10 (mm)
+_MM_TO_HWPUNIT = 7200 / 25.4
+_OFFICIAL_PAGE_MARGINS = {
+    'top': round(25 * _MM_TO_HWPUNIT),
+    'bottom': round(20 * _MM_TO_HWPUNIT),
+    'left': round(25 * _MM_TO_HWPUNIT),
+    'right': round(25 * _MM_TO_HWPUNIT),
+    'header': round(10 * _MM_TO_HWPUNIT),
+    'footer': round(10 * _MM_TO_HWPUNIT),
+}
+_TABLE_HEADER_FILL_COLOR = '#C8C8C8'  # 표 헤더 행 배경 회색 (규칙 8-2)
+
+
+def apply_official_page_margins(hwpx_path):
+    """Post-process section0.xml: 공문서 페이지 여백 적용."""
+    if not os.path.exists(hwpx_path):
+        return
+    section_name = 'Contents/section0.xml'
+    try:
+        with zipfile.ZipFile(hwpx_path, 'r') as zf:
+            section_xml = zf.read(section_name)
+        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', section_xml[:4096]):
+            ET.register_namespace(prefix.decode(), uri.decode())
+        root = ET.fromstring(section_xml)
+        changed = False
+        for page_pr in root.iter(f'{{{_NS_HP}}}pagePr'):
+            margin = page_pr.find(f'{{{_NS_HP}}}margin')
+            if margin is None:
+                continue
+            for key, value in _OFFICIAL_PAGE_MARGINS.items():
+                if margin.get(key) != str(value):
+                    margin.set(key, str(value))
+                    changed = True
+        if changed:
+            _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
+    except Exception as e:
+        print(f'[경고] 페이지 여백 후처리 실패: {e}', file=sys.stderr)
+
+
+def _make_gray_border_fill(source_fill, new_id):
+    """기존 borderFill을 복제해 회색 배경(fillBrush)을 추가한 사본 생성."""
+    clone = copy.deepcopy(source_fill)
+    clone.set('id', str(new_id))
+    fill_brush = clone.find(f'{{{_NS_HC}}}fillBrush')
+    if fill_brush is None:
+        fill_brush = ET.SubElement(clone, f'{{{_NS_HC}}}fillBrush')
+    win_brush = fill_brush.find(f'{{{_NS_HC}}}winBrush')
+    if win_brush is None:
+        win_brush = ET.SubElement(fill_brush, f'{{{_NS_HC}}}winBrush')
+        win_brush.set('hatchColor', '#999999')
+        win_brush.set('alpha', '0')
+    win_brush.set('faceColor', _TABLE_HEADER_FILL_COLOR)
+    return clone
+
+
+def apply_table_header_shading(hwpx_path, table_layouts):
+    """Post-process: 표 첫 행(헤더) 셀에 회색 배경 borderFill 적용 (규칙 8-2)."""
+    if not table_layouts or not os.path.exists(hwpx_path):
+        return
+    section_name = 'Contents/section0.xml'
+    header_name = 'Contents/header.xml'
+    try:
+        with zipfile.ZipFile(hwpx_path, 'r') as zf:
+            section_xml = zf.read(section_name)
+            header_xml = zf.read(header_name)
+        for source in (section_xml, header_xml):
+            for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', source[:4096]):
+                ET.register_namespace(prefix.decode(), uri.decode())
+
+        section_root = ET.fromstring(section_xml)
+        header_root = ET.fromstring(header_xml)
+
+        border_fills = header_root.find(f'.//{{{_NS_HH}}}borderFills')
+        if border_fills is None:
+            return
+        fills_by_id = {bf.get('id'): bf for bf in border_fills.findall(f'{{{_NS_HH}}}borderFill')}
+        max_id = max((int(i) for i in fills_by_id if i and i.isdigit()), default=0)
+
+        # 표마다 첫 행 셀의 borderFill을 회색 배경 사본으로 교체
+        gray_ids = {}  # 원본 id → 회색 사본 id
+        section_changed = False
+        tables = section_root.iter(f'{{{_NS_HP}}}tbl')
+        for tbl, layout in zip(tables, table_layouts):
+            header_cells, _ = _coerce_table_layout(layout)
+            if not header_cells:
+                continue
+            first_tr = tbl.find(f'{{{_NS_HP}}}tr')
+            if first_tr is None:
+                continue
+            for tc in first_tr.findall(f'{{{_NS_HP}}}tc'):
+                src_id = tc.get('borderFillIDRef')
+                if src_id is None or src_id not in fills_by_id:
+                    continue
+                if src_id not in gray_ids:
+                    max_id += 1
+                    border_fills.append(_make_gray_border_fill(fills_by_id[src_id], max_id))
+                    gray_ids[src_id] = str(max_id)
+                tc.set('borderFillIDRef', gray_ids[src_id])
+                section_changed = True
+
+        if not section_changed:
+            return
+        border_fills.set('itemCnt', str(len(border_fills.findall(f'{{{_NS_HH}}}borderFill'))))
+        _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(header_root, encoding='utf-8', xml_declaration=True))
+        _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(section_root, encoding='utf-8', xml_declaration=True))
+    except Exception as e:
+        print(f'[경고] 표 헤더 배경 후처리 실패: {e}', file=sys.stderr)
+
+
+def apply_table_cell_merges(hwpx_path, table_layouts):
+    """Post-process section0.xml: 원본 표의 병합 셀을 실제 셀 병합으로 재현.
+
+    각 병합 범위에 대해 앵커 셀의 cellSpan을 설정하고 피병합 셀을 제거하며,
+    앵커 cellSz를 병합 범위 합으로 확장한다.
+    """
+    if not table_layouts or not os.path.exists(hwpx_path):
+        return
+    if not any(layout.get('merges') for layout in table_layouts if isinstance(layout, dict)):
+        return
+    section_name = 'Contents/section0.xml'
+    try:
+        with zipfile.ZipFile(hwpx_path, 'r') as zf:
+            section_xml = zf.read(section_name)
+        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', section_xml[:4096]):
+            ET.register_namespace(prefix.decode(), uri.decode())
+        root = ET.fromstring(section_xml)
+        changed = False
+        tables = root.iter(f'{{{_NS_HP}}}tbl')
+        for tbl, layout in zip(tables, table_layouts):
+            merges = layout.get('merges') if isinstance(layout, dict) else None
+            if not merges:
+                continue
+            # (row, col) → (tc, 소속 tr) 매핑
+            cell_map = {}
+            for tr in tbl.findall(f'{{{_NS_HP}}}tr'):
+                for tc in tr.findall(f'{{{_NS_HP}}}tc'):
+                    addr = tc.find(f'{{{_NS_HP}}}cellAddr')
+                    if addr is None:
+                        continue
+                    key = (int(addr.get('rowAddr', -1)), int(addr.get('colAddr', -1)))
+                    cell_map[key] = (tc, tr)
+            for row, col, row_span, col_span in merges:
+                anchor = cell_map.get((row, col))
+                if anchor is None:
+                    continue
+                anchor_tc, _ = anchor
+                covered = [
+                    (ri, ci)
+                    for ri in range(row, row + row_span)
+                    for ci in range(col, col + col_span)
+                    if (ri, ci) != (row, col)
+                ]
+                if any((ri, ci) not in cell_map for ri, ci in covered):
+                    continue  # 격자 불일치 — 이 병합은 건너뜀
+                span_elem = anchor_tc.find(f'{{{_NS_HP}}}cellSpan')
+                size_elem = anchor_tc.find(f'{{{_NS_HP}}}cellSz')
+                if span_elem is None or size_elem is None:
+                    continue
+                # 병합 범위 합으로 앵커 크기 확장 (앵커 행의 너비 합 + 앵커 열의 높이 합)
+                width = 0
+                for ci in range(col, col + col_span):
+                    sz = cell_map[(row, ci)][0].find(f'{{{_NS_HP}}}cellSz')
+                    width += int(sz.get('width', 0)) if sz is not None else 0
+                height = 0
+                for ri in range(row, row + row_span):
+                    sz = cell_map[(ri, col)][0].find(f'{{{_NS_HP}}}cellSz')
+                    height += int(sz.get('height', 0)) if sz is not None else 0
+                span_elem.set('rowSpan', str(row_span))
+                span_elem.set('colSpan', str(col_span))
+                size_elem.set('width', str(width))
+                size_elem.set('height', str(height))
+                for key in covered:
+                    tc, tr = cell_map.pop(key)
+                    tr.remove(tc)
+                changed = True
+        if changed:
+            _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
+    except Exception as e:
+        print(f'[경고] 셀 병합 후처리 실패: {e}', file=sys.stderr)
+
+
+def apply_table_layout_profiles(hwpx_path, table_layouts):
+    if not table_layouts or not os.path.exists(hwpx_path):
         return
     ns = {'hp': 'http://www.hancom.co.kr/hwpml/2011/paragraph'}
     section_name = 'Contents/section0.xml'
@@ -960,37 +1538,58 @@ def apply_table_width_profiles(hwpx_path, table_headers):
         print(f'  [경고] 표 폭 후처리 준비 실패: {e}')
         return
     try:
-        ET.register_namespace('hp', ns['hp'])
+        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', section_xml[:4096]):
+            ET.register_namespace(prefix.decode(), uri.decode())
         root = ET.fromstring(section_xml)
         changed = False
         tables = root.findall('.//hp:tbl', ns)
         for ti, tbl in enumerate(tables):
-            if ti >= len(table_headers):
+            if ti >= len(table_layouts):
                 break
+            header, rows = _coerce_table_layout(table_layouts[ti])
             col_count = int(tbl.attrib.get('colCnt', '0') or 0)
-            if col_count <= 1:
-                continue
-            profile = _table_header_profile(table_headers[ti], col_count)
-            if not profile or len(profile) != col_count:
+            if col_count <= 0:
                 continue
             total_width = TABLE_TOTAL_WIDTH
             sz = tbl.find('hp:sz', ns)
             if sz is not None:
                 total_width = int(sz.attrib.get('width', total_width) or total_width)
-            widths = _profile_to_widths(profile, total_width)
+            widths = calc_col_widths(header, rows, total_width)
+            if len(widths) != col_count:
+                profile = _table_header_profile(header, col_count)
+                if profile and len(profile) == col_count:
+                    widths = _profile_to_widths(profile, total_width)
+                else:
+                    widths = _profile_to_widths([1] * col_count, total_width)
+            row_heights = calc_row_heights(header, rows, widths)
+            cell_margin = calc_table_cell_margin(header, rows, widths)
+            cell_para_space = calc_table_cell_para_space(header, rows, widths)
+            after_para_space = calc_table_after_para_space(header, rows, widths)
             for tc in tbl.findall('.//hp:tc', ns):
                 cell_addr = tc.find('hp:cellAddr', ns)
                 cell_sz = tc.find('hp:cellSz', ns)
-                if cell_addr is None or cell_sz is None:
+                if cell_addr is None:
                     continue
-                col = int(cell_addr.attrib.get('colAddr', '0') or 0)
+                if cell_sz is None:
+                    cell_sz = ET.SubElement(tc, _hp_tag('cellSz'))
+                row = _int_attr(cell_addr, 'rowAddr', 0)
+                col = _int_attr(cell_addr, 'colAddr', 0)
                 if 0 <= col < len(widths):
-                    cell_sz.set('width', str(widths[col]))
-                    changed = True
+                    changed = _set_attrs(cell_sz, {'width': widths[col]}) or changed
+                if 0 <= row < len(row_heights):
+                    changed = _set_attrs(cell_sz, {'height': row_heights[row]}) or changed
+                changed = _compact_cell_paragraphs(tc, cell_para_space) or changed
+            changed = _apply_table_cell_margin(tbl, cell_margin) or changed
+            changed = _compact_paragraph_after_table(root, tbl, after_para_space) or changed
         if changed:
             _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
     except Exception as e:
         print(f'  [경고] 표 폭 후처리 실패: {e}')
+
+
+def apply_table_width_profiles(hwpx_path, table_headers):
+    table_layouts = [{'header': header or [], 'rows': []} for header in (table_headers or [])]
+    apply_table_layout_profiles(hwpx_path, table_layouts)
 
 
 def insert_table(hwp, header, rows):
@@ -1058,7 +1657,9 @@ def insert_table(hwp, header, rows):
 # ─── 문서 빌드 ─────────────────────────────────────────────────────────────────
 
 def build_doc(hwp, blocks):
-    for blk in blocks:
+    first_depth1_li_seen = False
+
+    for i, blk in enumerate(blocks):
         t = blk.get('type')
 
         if t == 'h':
@@ -1081,8 +1682,23 @@ def build_doc(hwp, blocks):
 
         elif t == 'li':
             depth = blk.get('depth', 0)
-            set_para_shape(hwp, align=1, indent_left=depth * 400, indent_first=0)
-            set_char_shape(hwp, height=1300, font='body')
+            if depth == 1:
+                if first_depth1_li_seen:
+                    _blank_line(hwp)
+                first_depth1_li_seen = True
+            para_shape = official_list_para_shape(depth, blk.get('marker', ''))
+            set_para_shape(
+                hwp,
+                align=para_shape['align'],
+                space_before=para_shape.get('space_before', 0),
+                space_after=para_shape.get('space_after', 0),
+                indent_left=para_shape['indent_left'],
+                indent_first=para_shape['indent_first'],
+            )
+            # Section markers (1. 가. Ⅰ. etc.) are bold; plain bullets (•) are not
+            marker = blk.get('marker', '')
+            bold = depth <= 2 and marker != '•'
+            set_char_shape(hwp, height=1300, bold=bold, font='body')
             insert_text(hwp, blk['text'])
             break_para(hwp)
 
@@ -1105,42 +1721,83 @@ def build_doc(hwp, blocks):
             break_para(hwp)
 
         elif t == 'table':
+            if i > 0:
+                _blank_line(hwp)
             set_para_shape(hwp, align=0)
             set_char_shape(hwp, height=1200, font='table')
             insert_table(hwp, blk.get('header'), blk.get('rows', []))
+            _blank_line(hwp)
 
         elif t == 'official_header':
-            set_para_shape(hwp, align=1)
-            set_char_shape(hwp, height=1200, font='table')
-            label = blk['key'].ljust(4)
-            insert_text(hwp, label + '  ' + blk['value'])
+            set_para_shape(hwp, align=0)
+            set_char_shape(hwp, height=1300, font='body')
+            insert_text(hwp, blk['key'] + ': ' + blk['value'])
+            break_para(hwp)
+
+        elif t == 'attachment':
+            # 붙임 연속 항목(2.~)은 '붙임  ' 너비(시각폭 6자)만큼 들여 정렬
+            indent = 720 if blk.get('cont') else 0
+            set_para_shape(hwp, align=0, indent_left=indent)
+            set_char_shape(hwp, height=1300, font='body')
+            insert_text(hwp, blk['text'])
             break_para(hwp)
 
 
-def _insert_end_mark(hwp, blocks):
+def _ends_with_end_mark(text):
+    return (text or '').strip().rstrip('.').endswith('끝')
+
+
+def append_end_mark_blocks(blocks):
+    """공문서 '끝' 표시 규칙 (시행규칙 제4조제5항) — 블록 전처리.
+
+    - 본문/붙임 마지막 글자 뒤 같은 줄에 2타 띄우고 '끝.'
+    - 표로 끝난 경우 표 아래 왼쪽에서 1타 띄우고 '끝.' (별도 단락)
+    - 이미 '끝'·'이하 빈칸'으로 마감된 문서는 그대로 둠
+    """
     if not blocks:
-        return
+        return blocks
     last = blocks[-1]
-    last_text = last.get('text', '') or ''
-    if last_text.strip().endswith('끝'):
-        return
+    if _ends_with_end_mark(last.get('text', '')):
+        return blocks
     if last['type'] == 'table':
-        last_rows = last.get('rows', [])
+        last_rows = last.get('rows') or []
         if last_rows:
-            last_row_text = ' '.join(last_rows[-1])
-            if last_row_text.strip().endswith('끝') or last_row_text.strip() == '이하 빈칸':
-                return
-        hwp.HAction.Run('MoveDocEnd')
-        set_para_shape(hwp, align=1)
-        set_char_shape(hwp, height=1300, font='body')
-        insert_text(hwp, ' 끝')
-        break_para(hwp)
-    else:
-        hwp.HAction.Run('MoveDocEnd')
-        set_para_shape(hwp, align=1)
-        set_char_shape(hwp, height=1300, font='body')
-        insert_text(hwp, '  끝')
-        break_para(hwp)
+            last_row_text = ' '.join(last_rows[-1]).strip()
+            if _ends_with_end_mark(last_row_text) or last_row_text == '이하 빈칸':
+                return blocks
+        return blocks + [{'type': 'p', 'text': ' 끝.'}]
+    if last['type'] in ('p', 'li', 'bq', 'attachment'):
+        updated = dict(last)
+        updated['text'] = (updated.get('text', '') or '').rstrip() + '  끝.'
+        return blocks[:-1] + [updated]
+    return blocks + [{'type': 'p', 'text': '  끝.'}]
+
+
+_OFFICIAL_DATE_PATTERN = re.compile(
+    r'(?<![\d.])(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*\.?(?!\d)'
+)
+
+
+def _format_official_date(match):
+    year, month, day = match.group(1), int(match.group(2)), int(match.group(3))
+    if not (1 <= month <= 12 and 1 <= day <= 31):
+        return match.group(0)
+    return f'{year}. {month}. {day}.'
+
+
+def normalize_official_dates(blocks):
+    """날짜 표기 규칙 (행정업무운영규정 영 제7조) — '2026.3.22' → '2026. 3. 22.'"""
+    result = []
+    for blk in blocks:
+        if blk.get('type') in ('p', 'li', 'bq', 'attachment', 'official_header', 'h') and blk.get('text'):
+            updated = dict(blk)
+            updated['text'] = _OFFICIAL_DATE_PATTERN.sub(_format_official_date, updated['text'])
+            if 'value' in updated and updated.get('value'):
+                updated['value'] = _OFFICIAL_DATE_PATTERN.sub(_format_official_date, updated['value'])
+            result.append(updated)
+        else:
+            result.append(blk)
+    return result
 
 
 # ─── 변환 실행 ─────────────────────────────────────────────────────────────────
@@ -1159,26 +1816,135 @@ def build_output_path(src_path, output_dir):
     raise FileExistsError(f'저장 가능한 파일명을 찾지 못함: {out_dir / (src.stem + ".hwpx")}')
 
 
+def _output_manifest_path(output_dir):
+    return as_path(output_dir) / OUTPUT_MANIFEST_NAME
+
+
+def read_output_manifest(output_dir):
+    manifest_path = _output_manifest_path(output_dir)
+    if not manifest_path.exists():
+        return []
+    try:
+        data = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f'출력 폴더 manifest를 읽을 수 없음: {manifest_path}') from exc
+    files = data.get('files', [])
+    if not isinstance(files, list):
+        raise RuntimeError(f'출력 폴더 manifest 형식이 올바르지 않음: {manifest_path}')
+    return [str(item) for item in files if isinstance(item, str)]
+
+
+def write_output_manifest(output_dir, output_files):
+    out_dir = as_path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    names = []
+    for output_file in output_files:
+        candidate = Path(output_file)
+        if not candidate.is_absolute():
+            if '..' in candidate.parts:
+                raise RuntimeError(f'manifest에 출력 폴더 밖의 파일을 기록할 수 없음: {output_file}')
+            names.append(candidate.as_posix())
+            continue
+        output_path = candidate.expanduser().resolve()
+        try:
+            names.append(output_path.relative_to(out_dir).as_posix())
+        except ValueError as exc:
+            raise RuntimeError(f'manifest에 출력 폴더 밖의 파일을 기록할 수 없음: {output_path}') from exc
+    payload = {
+        'app': 'anyway_to_hwpx',
+        'files': sorted(dict.fromkeys(names)),
+    }
+    _output_manifest_path(out_dir).write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+
+def prepare_output_dir(output_dir, empty_output_folder=False):
+    out_dir = as_path(output_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if not empty_output_folder:
+        return out_dir
+
+    manifest_path = _output_manifest_path(out_dir)
+    children = [child for child in out_dir.iterdir() if child.name != OUTPUT_MANIFEST_NAME]
+    if children and not manifest_path.exists():
+        raise RuntimeError(
+            f'출력 폴더가 비어 있지 않고 이 앱의 manifest가 없음: {out_dir}\n'
+            f'다른 파일 보호를 위해 --empty-output-folder를 중단함.'
+        )
+
+    managed_files = set(read_output_manifest(out_dir))
+    unknown_files = []
+    for child in children:
+        rel_name = child.relative_to(out_dir).as_posix()
+        if rel_name not in managed_files:
+            unknown_files.append(rel_name)
+    if unknown_files:
+        preview = ', '.join(unknown_files[:5])
+        raise RuntimeError(
+            f'출력 폴더에 manifest가 관리하지 않는 파일이 있음: {preview}\n'
+            f'다른 파일 보호를 위해 --empty-output-folder를 중단함.'
+        )
+
+    for child in children:
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    write_output_manifest(out_dir, [])
+    return out_dir
+
+
+def record_output_file(output_dir, output_file):
+    if output_dir is None:
+        return
+    out_dir = as_path(output_dir)
+    if not _output_manifest_path(out_dir).exists():
+        return
+    files = read_output_manifest(out_dir)
+    output_path = as_path(output_file)
+    try:
+        rel_name = output_path.relative_to(out_dir).as_posix()
+    except ValueError:
+        return
+    files.append(rel_name)
+    write_output_manifest(out_dir, files)
+
+
 def convert_file(hwp, src_path, hwpx_path, insert_end_mark=False, kordoc_home=None):
     src = as_path(src_path)
     out = as_path(hwpx_path)
     blocks = detect_and_parse(src, kordoc_home=kordoc_home)
-    table_headers = [blk.get('header') or [] for blk in blocks if blk.get('type') == 'table']
+    if insert_end_mark:
+        blocks = normalize_official_dates(blocks)
+        blocks = append_end_mark_blocks(blocks)
+    table_layouts = [
+        {
+            'header': blk.get('header') or [],
+            'rows': blk.get('rows') or [],
+            'merges': blk.get('merges') or [],
+        }
+        for blk in blocks
+        if blk.get('type') == 'table'
+    ]
 
-    hwp.XHwpDocuments.Add(isTab=False)
+    _com_call(lambda: hwp.XHwpDocuments.Add(isTab=False))
     time.sleep(0.5)
     doc = hwp.XHwpDocuments.Item(hwp.XHwpDocuments.Count - 1)
 
     try:
         build_doc(hwp, blocks)
-        if insert_end_mark:
-            _insert_end_mark(hwp, blocks)
-        hwp.SaveAs(str(out), 'HWPX', '')
+        _com_call(lambda: hwp.SaveAs(str(out), 'HWPX', ''))
         time.sleep(0.5)
     finally:
-        doc.Close(isDirty=False)
+        _com_call(lambda: doc.Close(isDirty=False))
         time.sleep(0.3)
-    apply_table_width_profiles(out, table_headers)
+    apply_table_layout_profiles(out, table_layouts)
+    apply_list_hanging_indents(out)
+    apply_table_cell_merges(out, table_layouts)
+    apply_table_header_shading(out, table_layouts)
+    apply_official_page_margins(out)
     ext = src.suffix.upper().lstrip('.')
     print(f'[완료] {ext} → {out.name}')
 
@@ -1190,6 +1956,7 @@ def main(argv=None):
     )
     parser.add_argument('files', nargs='*', help='변환할 파일 경로')
     parser.add_argument('-o', '--output-dir', default=None, help='저장할 폴더 경로 (기본: 입력 파일과 같은 폴더)')
+    parser.add_argument('--empty-output-folder', action='store_true', help='변환 전 앱 manifest가 관리하는 출력 폴더 파일만 비움')
     parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입")
     parser.add_argument('--list-formats', action='store_true', help='지원 형식 목록 출력')
     parser.add_argument('--preflight', action='store_true', help='HWP COM 실행 가능 여부만 점검하고 종료')
@@ -1220,10 +1987,13 @@ def main(argv=None):
 
     if not args.files:
         parser.error('변환할 파일 경로가 필요함')
+    if args.empty_output_folder and not args.output_dir:
+        parser.error('--empty-output-folder는 -o/--output-dir와 함께 사용해야 함')
 
     hwp = None
     failures = []
     try:
+        prepared_output_dir = prepare_output_dir(args.output_dir, args.empty_output_folder) if args.output_dir else None
         print('HWP 실행 중...')
         try:
             hwp = create_hwp_object(visible=True)
@@ -1235,7 +2005,7 @@ def main(argv=None):
         for src_arg in args.files:
             try:
                 src_path = as_path(src_arg)
-                hwpx_path = build_output_path(src_path, args.output_dir)
+                hwpx_path = build_output_path(src_path, prepared_output_dir)
                 print(f'변환 중: {src_path.name} → {hwpx_path.name}')
                 convert_file(
                     hwp,
@@ -1244,6 +2014,7 @@ def main(argv=None):
                     insert_end_mark=args.insert_end_mark,
                     kordoc_home=args.kordoc_home,
                 )
+                record_output_file(prepared_output_dir, hwpx_path)
             except Exception as exc:
                 failures.append((src_arg, exc))
                 print(f'[FAIL] {src_arg}: {exc}', file=sys.stderr)
