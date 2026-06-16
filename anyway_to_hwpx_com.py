@@ -16,6 +16,7 @@ import zipfile
 import tempfile
 import shutil
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 
 from hwpx_layout import (
     OFFICIAL_LIST_MAX_DEPTH,
@@ -35,6 +36,12 @@ from hwpx_layout import (
     normalize_table_rows,
     official_list_para_shape,
 )
+from table_grid import SourceCell, block_rows_from_grid, expand_spanned_rows
+from table_hwpx_postprocess import apply_table_layout_profiles as _apply_table_layout_profiles_new
+from table_model import table_layout_for
+
+
+DiagnoseStageReporter = Callable[[str], None]
 
 
 def _configure_utf8_stdio():
@@ -304,7 +311,7 @@ def parse_markdown(text):
                 rows.append(_parse_table_row(lines[i]))
                 i += 1
             header, rows = _normalize_parsed_table(header, rows)
-            blocks.append({'type': 'table', 'header': header, 'rows': rows})
+            blocks.append({'type': 'table', 'header': header, 'rows': rows, 'table_source': 'markdown'})
             continue
 
         li_result = _detect_list_item(line)
@@ -393,7 +400,7 @@ def parse_plain_text(text):
         if tab_run:
             rows = [_split_tab_row(lines[i + k]) for k in range(tab_run)]
             header, body = _normalize_parsed_table(rows[0], rows[1:])
-            blocks.append({'type': 'table', 'header': header, 'rows': body})
+            blocks.append({'type': 'table', 'header': header, 'rows': body, 'table_source': 'text'})
             i += tab_run
             continue
 
@@ -408,7 +415,7 @@ def parse_plain_text(text):
                 header = _parse_table_row(table_lines[0])
                 body_rows = [_parse_table_row(ln) for ln in table_lines[1:]]
             header, body_rows = _normalize_parsed_table(header, body_rows)
-            blocks.append({'type': 'table', 'header': header, 'rows': body_rows})
+            blocks.append({'type': 'table', 'header': header, 'rows': body_rows, 'table_source': 'text'})
             i += pipe_run
             continue
 
@@ -496,13 +503,27 @@ def parse_html(text):
                 depth = len(node.find_parents(['ul', 'ol'])) - 1
                 blocks.append({'type': 'li', 'text': _clean_inline(value), 'depth': max(depth, 0)})
         elif node.name == 'table':
-            rows = []
+            source_rows = []
             for tr in node.find_all('tr'):
-                cells = [cell.get_text(' ', strip=True) for cell in tr.find_all(['th', 'td'])]
+                cells = [
+                    SourceCell(
+                        text=cell.get_text(' ', strip=True),
+                        row_span=max(1, int(cell.get('rowspan', 1) or 1)),
+                        col_span=max(1, int(cell.get('colspan', 1) or 1)),
+                    )
+                    for cell in tr.find_all(['th', 'td'])
+                ]
                 if cells:
-                    rows.append(cells)
-            if rows:
-                blocks.append({'type': 'table', 'header': rows[0], 'rows': rows[1:]})
+                    source_rows.append(cells)
+            grid, merged_cells = expand_spanned_rows(source_rows)
+            header, rows = block_rows_from_grid(grid)
+            if header:
+                block = (
+                    {'type': 'table', 'header': header, 'rows': rows, 'table_source': 'html', 'merged_cells': merged_cells}
+                    if merged_cells
+                    else {'type': 'table', 'header': header, 'rows': rows, 'table_source': 'html'}
+                )
+                blocks.append(block)
     return blocks
 
 
@@ -517,7 +538,55 @@ def parse_csv_file(path):
     rows = [[_clean_inline(cell.strip()) for cell in row] for row in rows if any(cell.strip() for cell in row)]
     if not rows:
         return []
-    return [{'type': 'table', 'header': rows[0], 'rows': rows[1:]}]
+    return [{'type': 'table', 'header': rows[0], 'rows': rows[1:], 'table_source': 'csv'}]
+
+
+def _trim_grid(grid):
+    while grid and not any(grid[-1]):
+        grid.pop()
+    max_cols = max((len(row) for row in grid), default=0)
+    while max_cols > 0 and all((len(row) <= max_cols - 1 or row[max_cols - 1] == '') for row in grid):
+        max_cols -= 1
+    return [row[:max_cols] for row in grid]
+
+
+def _xlsx_table_block(ws):
+    top_left_spans = {}
+    covered = set()
+    for merged_range in ws.merged_cells.ranges:
+        row_span = merged_range.max_row - merged_range.min_row + 1
+        col_span = merged_range.max_col - merged_range.min_col + 1
+        top_left_spans[(merged_range.min_row, merged_range.min_col)] = (row_span, col_span)
+        for row_index in range(merged_range.min_row, merged_range.max_row + 1):
+            for col_index in range(merged_range.min_col, merged_range.max_col + 1):
+                if row_index == merged_range.min_row and col_index == merged_range.min_col:
+                    continue
+                covered.add((row_index, col_index))
+    source_rows = []
+    for row_index in range(1, ws.max_row + 1):
+        source_row = []
+        for col_index in range(1, ws.max_column + 1):
+            if (row_index, col_index) in covered:
+                continue
+            row_span, col_span = top_left_spans.get((row_index, col_index), (1, 1))
+            value = ws.cell(row=row_index, column=col_index).value
+            source_row.append(SourceCell('' if value is None else _clean_inline(str(value)), row_span, col_span))
+        if source_row:
+            source_rows.append(source_row)
+    grid, merged_cells = expand_spanned_rows(source_rows)
+    header, rows = block_rows_from_grid(_trim_grid(grid))
+    if not header:
+        return None
+    block = {
+        'type': 'table',
+        'header': header,
+        'rows': rows,
+        'table_source': 'xlsx',
+        'worksheet_title': ws.title,
+    }
+    if merged_cells:
+        block['merged_cells'] = merged_cells
+    return block
 
 
 def parse_xlsx(path):
@@ -526,21 +595,15 @@ def parse_xlsx(path):
     except ImportError as exc:
         raise RuntimeError('XLSX 변환에는 openpyxl이 필요함: pip install openpyxl') from exc
 
-    wb = load_workbook(path, read_only=True, data_only=True)
+    wb = load_workbook(path, data_only=True)
     try:
         blocks = []
         for ws in wb.worksheets:
-            rows = []
-            for row in ws.iter_rows(values_only=True):
-                values = ['' if value is None else _clean_inline(str(value)) for value in row]
-                while values and values[-1] == '':
-                    values.pop()
-                if any(values):
-                    rows.append(values)
-            if not rows:
+            table_block = _xlsx_table_block(ws)
+            if table_block is None:
                 continue
             blocks.append({'type': 'h', 'level': 2, 'text': ws.title})
-            blocks.append({'type': 'table', 'header': rows[0], 'rows': rows[1:]})
+            blocks.append(table_block)
         return blocks
     finally:
         wb.close()
@@ -568,6 +631,18 @@ def _odl_collect_text_parts(element):
     return parts
 
 
+def _odl_span(cell, keys):
+    for key in keys:
+        value = cell.get(key)
+        if value is None:
+            continue
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 1
+    return 1
+
+
 def _odl_table_grid(element):
     """ODL 셀 좌표(row/column number, span)로 원본 표 격자를 복원.
 
@@ -588,12 +663,20 @@ def _odl_table_grid(element):
         for cell in flat
     )
     if not has_coords:
-        grid = []
+        source_rows = []
         for row in rows:
-            texts = [_odl_cell_text(cell) for cell in (row.get("cells") or [])]
-            if any(texts):
-                grid.append(texts)
-        return grid, []
+            source_row = [
+                SourceCell(
+                    _odl_cell_text(cell),
+                    _odl_span(cell, ("rowspan", "rowSpan", "row span", "row_span")),
+                    _odl_span(cell, ("colspan", "colSpan", "column span", "col span", "col_span")),
+                )
+                for cell in (row.get("cells") or [])
+            ]
+            if any(cell.text for cell in source_row):
+                source_rows.append(source_row)
+        grid, merged_cells = expand_spanned_rows(source_rows)
+        return grid, [tuple(span) for span in merged_cells]
     n_rows = max(cell["row number"] for cell in flat)
     n_cols = max(cell["column number"] + cell.get("column span", 1) - 1 for cell in flat)
     grid = [[''] * n_cols for _ in range(n_rows)]
@@ -658,7 +741,10 @@ def _odl_element_to_blocks(element):
     elif etype == "table":
         grid, merges = _odl_table_grid(element)
         if grid:
-            blocks.append({"type": "table", "header": grid[0], "rows": grid[1:], "merges": merges})
+            block = {"type": "table", "header": grid[0], "rows": grid[1:], "table_source": "pdf"}
+            if merges:
+                block["merged_cells"] = [list(span) for span in merges]
+            blocks.append(block)
 
     elif etype == "list":
         for item in element.get("list items", []):
@@ -1073,7 +1159,7 @@ def _pdfplumber_table_to_block(table_rows):
     if not rows:
         return None
     header, body = _normalize_parsed_table(rows[0], rows[1:])
-    return {'type': 'table', 'header': header, 'rows': body}
+    return {'type': 'table', 'header': header, 'rows': body, 'table_source': 'pdf'}
 
 
 def _word_number(word, key):
@@ -1376,6 +1462,63 @@ def _list_depth(para):
         return 0
 
 
+def _docx_cell_text(tc, text_tag):
+    return ''.join(node.text for node in tc.iter() if node.tag == text_tag and node.text).strip()
+
+
+def _docx_grid_span(tc):
+    grid_span = tc.tcPr.gridSpan if tc.tcPr is not None else None
+    if grid_span is None or grid_span.val is None:
+        return 1
+    return max(1, int(grid_span.val))
+
+
+def _docx_vmerge_value(tc):
+    vmerge = tc.tcPr.vMerge if tc.tcPr is not None else None
+    return '' if vmerge is None or vmerge.val is None else str(vmerge.val)
+
+
+def _docx_table_grid(table):
+    from docx.oxml.ns import qn
+    text_tag = qn('w:t')
+    grid = []
+    merged_cells = []
+    active_vertical = {}
+    for row_index, table_row in enumerate(table._tbl.tr_lst):
+        row_values = []
+        col_index = 0
+        for tc in table_row.tc_lst:
+            while len(row_values) <= col_index:
+                row_values.append('')
+            col_span = _docx_grid_span(tc)
+            vmerge = _docx_vmerge_value(tc)
+            if vmerge == 'continue':
+                merge_index = active_vertical.get(col_index)
+                if merge_index is not None:
+                    merged_cells[merge_index][2] += 1
+                row_values[col_index] = ''
+            else:
+                for covered_col in range(col_index, col_index + col_span):
+                    active_vertical.pop(covered_col, None)
+                row_values[col_index] = _docx_cell_text(tc, text_tag)
+                if col_span > 1 or vmerge == 'restart':
+                    merged_cells.append([row_index, col_index, 1, col_span])
+                    merge_index = len(merged_cells) - 1
+                    if vmerge == 'restart':
+                        for covered_col in range(col_index, col_index + col_span):
+                            active_vertical[covered_col] = merge_index
+            for covered_col in range(col_index + 1, col_index + col_span):
+                while len(row_values) <= covered_col:
+                    row_values.append('')
+                row_values[covered_col] = ''
+            col_index += col_span
+        if any(row_values):
+            grid.append(row_values)
+    max_cols = max((len(row) for row in grid), default=0)
+    normalized = [row + [''] * (max_cols - len(row)) for row in grid]
+    return normalized, [span for span in merged_cells if span[2] > 1 or span[3] > 1]
+
+
 def parse_docx(docx_path):
     try:
         from docx import Document
@@ -1390,11 +1533,14 @@ def parse_docx(docx_path):
         if isinstance(item, DocxTable):
             if not item.rows:
                 continue
-            header = [cell.text.strip() for cell in item.rows[0].cells]
-            rows = [[cell.text.strip() for cell in row.cells] for row in item.rows[1:]]
+            grid, merged_cells = _docx_table_grid(item)
+            header, rows = block_rows_from_grid(grid)
             if all(not h for h in header) and not rows:
                 continue
-            blocks.append({'type': 'table', 'header': header, 'rows': rows})
+            block = {'type': 'table', 'header': header, 'rows': rows, 'table_source': 'docx'}
+            if merged_cells:
+                block['merged_cells'] = merged_cells
+            blocks.append(block)
             continue
 
         para = item
@@ -1591,9 +1737,9 @@ def set_para_shape(hwp, align=0, space_before=0, space_after=0, indent_left=0, i
     pset.SetItem('Align', align)
     # SpaceBefore/SpaceAfter: silently ignored by HWP COM — handled via XML post-processing if needed
     # LeftMargin works with 0.5× ratio (COM LeftMargin=X → hp:case hc:left=X/2)
-    # Pass indent_left×2 so that hp:case stores indent_left exactly
-    if indent_left:
-        pset.SetItem('LeftMargin', indent_left * 2)
+    # Pass indent_left×2 so that hp:case stores indent_left exactly.
+    # Always set explicitly (even 0) to prevent inheritance from the previous paragraph's LeftMargin.
+    pset.SetItem('LeftMargin', indent_left * 2)
     # IndentFirst has no COM equivalent — apply_list_hanging_indents handles hc:intent post-processing
     act.Execute(pset)
 
@@ -1748,6 +1894,88 @@ def apply_list_hanging_indents(hwpx_path):
         _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
     except Exception as e:
         print(f'[경고] 목록 내어쓰기 후처리 실패: {e}', file=sys.stderr)
+
+
+# 공문서 목록 마커 패턴 (텍스트가 이 패턴으로 시작하면 목록 항목)
+_LIST_MARKER_RE = re.compile(
+    r'^(?:'
+    r'[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+\.?[ \t]+\S'          # Ⅰ. 총칙
+    r'|\d{1,2}\.(?!\d)[ \t]+\S'              # 1. 목적 (not 2026. 3.)
+    r'|[가나다라마바사아자차카타파하]\.[ \t]+\S'       # 가. 방침
+    r'|\d{1,2}\)[ \t]+\S'                    # 1) 세부
+    r'|[가나다라마바사아자차카타파하]\)[ \t]+\S'       # 가) 대상
+    r'|\(\d{1,2}\)[ \t]+\S'                  # (1) 내용
+    r'|\([가나다라마바사아자차카타파하]\)[ \t]+\S'     # (가) 방법
+    r'|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳][ \t]*\S'  # ① 확인
+    r'|[㉮㉯㉰㉱㉲㉳㉴㉵㉶㉷㉸㉹㉺㉻][ \t]*\S'      # ㉮ 보완
+    r'|[•\-][ \t]+\S'                        # bullet/dash
+    r')'
+)
+
+
+def fix_body_text_prid(hwpx_path):
+    """Post-process section0.xml: fix body text paragraphs assigned to list paraPr IDs.
+
+    HWP COM's SetItem('LeftMargin', 0) is silently ignored (treated as no-op).
+    As a result, body text paragraphs that follow list items inherit the list's
+    paraPr (left=900 etc.) instead of the body text paraPr (left=0 = paraPr=0).
+    This function corrects those assignments in the generated HWPX.
+    """
+    if not os.path.exists(hwpx_path):
+        return
+    section_name = 'Contents/section0.xml'
+    try:
+        with zipfile.ZipFile(hwpx_path, 'r') as zf:
+            header_xml = zf.read('Contents/header.xml')
+            section_xml = zf.read(section_name)
+        for source in (header_xml, section_xml):
+            for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', source[:4096]):
+                ET.register_namespace(prefix.decode(), uri.decode())
+        hroot = ET.fromstring(header_xml)
+        sroot = ET.fromstring(section_xml)
+
+        # Collect paraPr IDs whose left value is a known list body-stop
+        list_prid_set: set[str] = set()
+        for para_pr in hroot.iter(f'{{{_NS_HH}}}paraPr'):
+            pid = para_pr.get('id', '')
+            if not pid:
+                continue
+            for switch in para_pr.iter(f'{{{_NS_HP}}}switch'):
+                for block in switch:
+                    if block.tag != f'{{{_NS_HP}}}case':
+                        continue
+                    margin = block.find(f'{{{_NS_HH}}}margin')
+                    if margin is None:
+                        continue
+                    left_elem = margin.find(f'{{{_NS_HC}}}left')
+                    if left_elem is None:
+                        continue
+                    if int(left_elem.get('value', '0')) in _LIST_CASE_LEFT_TO_INTENT:
+                        list_prid_set.add(pid)
+
+        if not list_prid_set:
+            return
+
+        # Fix paragraphs that use a list paraPr but are not list items
+        changed = False
+        for p in sroot.iter(f'{{{_NS_HP}}}p'):
+            prid = p.get('paraPrIDRef', '')
+            if prid not in list_prid_set:
+                continue
+            text = ''.join(t.text or '' for t in p.iter(f'{{{_NS_HP}}}t'))
+            if text and _LIST_MARKER_RE.match(text):
+                continue  # Proper list item — keep
+            # Body text or blank paragraph: reset to Normal (paraPr=0)
+            p.set('paraPrIDRef', '0')
+            changed = True
+
+        if changed:
+            _rewrite_zip_entry(
+                hwpx_path, section_name,
+                ET.tostring(sroot, encoding='utf-8', xml_declaration=True),
+            )
+    except Exception as e:
+        print(f'[경고] 본문 단락 paraPr 보정 실패: {e}', file=sys.stderr)
 
 
 # 페이지 여백 (HWPX_작성규칙 7-2): 상 25 / 하 20 / 좌우 25 / 머리말·꼬리말 10 (mm)
@@ -1950,71 +2178,7 @@ def _section_text_width(root):
 
 
 def apply_table_layout_profiles(hwpx_path, table_layouts):
-    if not table_layouts or not os.path.exists(hwpx_path):
-        return
-    ns = {'hp': 'http://www.hancom.co.kr/hwpml/2011/paragraph'}
-    section_name = 'Contents/section0.xml'
-    try:
-        with zipfile.ZipFile(hwpx_path, 'r') as zf:
-            section_xml = zf.read(section_name)
-    except Exception as e:
-        print(f'  [경고] 표 폭 후처리 준비 실패: {e}')
-        return
-    try:
-        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', section_xml[:4096]):
-            ET.register_namespace(prefix.decode(), uri.decode())
-        root = ET.fromstring(section_xml)
-        changed = False
-        text_width = _section_text_width(root)
-        tables = root.findall('.//hp:tbl', ns)
-        for ti, tbl in enumerate(tables):
-            if ti >= len(table_layouts):
-                break
-            header, rows = _coerce_table_layout(table_layouts[ti])
-            col_count = int(tbl.attrib.get('colCnt', '0') or 0)
-            if col_count <= 0:
-                continue
-            sz = tbl.find('hp:sz', ns)
-            if text_width:
-                # 규칙 8-1: 표는 본문 폭 전체로 작성
-                total_width = text_width
-            elif sz is not None:
-                total_width = int(sz.attrib.get('width', TABLE_TOTAL_WIDTH) or TABLE_TOTAL_WIDTH)
-            else:
-                total_width = TABLE_TOTAL_WIDTH
-            widths = calc_col_widths(header, rows, total_width)
-            if len(widths) != col_count:
-                profile = _table_header_profile(header, col_count)
-                if profile and len(profile) == col_count:
-                    widths = _profile_to_widths(profile, total_width)
-                else:
-                    widths = _profile_to_widths([1] * col_count, total_width)
-            row_heights = calc_row_heights(header, rows, widths)
-            if sz is not None:
-                changed = _set_attrs(sz, {'width': sum(widths), 'height': sum(row_heights)}) or changed
-            cell_margin = calc_table_cell_margin(header, rows, widths)
-            cell_para_space = calc_table_cell_para_space(header, rows, widths)
-            after_para_space = calc_table_after_para_space(header, rows, widths)
-            for tc in tbl.findall('.//hp:tc', ns):
-                cell_addr = tc.find('hp:cellAddr', ns)
-                cell_sz = tc.find('hp:cellSz', ns)
-                if cell_addr is None:
-                    continue
-                if cell_sz is None:
-                    cell_sz = ET.SubElement(tc, _hp_tag('cellSz'))
-                row = _int_attr(cell_addr, 'rowAddr', 0)
-                col = _int_attr(cell_addr, 'colAddr', 0)
-                if 0 <= col < len(widths):
-                    changed = _set_attrs(cell_sz, {'width': widths[col]}) or changed
-                if 0 <= row < len(row_heights):
-                    changed = _set_attrs(cell_sz, {'height': row_heights[row]}) or changed
-                changed = _compact_cell_paragraphs(tc, cell_para_space) or changed
-            changed = _apply_table_cell_margin(tbl, cell_margin) or changed
-            changed = _compact_paragraph_after_table(root, tbl, after_para_space) or changed
-        if changed:
-            _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
-    except Exception as e:
-        print(f'  [경고] 표 폭 후처리 실패: {e}')
+    _apply_table_layout_profiles_new(hwpx_path, table_layouts)
 
 
 def apply_table_width_profiles(hwpx_path, table_headers):
@@ -2022,13 +2186,22 @@ def apply_table_width_profiles(hwpx_path, table_headers):
     apply_table_layout_profiles(hwpx_path, table_layouts)
 
 
-def insert_table(hwp, header, rows):
+def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_source=None, worksheet_title=None, merged_cells=None):
     all_rows = ([header] if header else []) + rows
     if not all_rows:
         return
     num_rows = len(all_rows)
     num_cols = max(len(r) for r in all_rows)
-    col_widths = calc_col_widths(header or [], rows)
+    layout = table_layout_for(
+        header or [],
+        rows,
+        table_role=table_role if isinstance(table_role, str) else None,
+        column_widths=column_widths if isinstance(column_widths, list) else None,
+        table_source=table_source if isinstance(table_source, str) else None,
+        worksheet_title=worksheet_title if isinstance(worksheet_title, str) else None,
+        merged_cells=merged_cells if isinstance(merged_cells, list) else None,
+    )
+    col_widths = layout.column_widths
     row_heights = calc_row_heights(header or [], rows, col_widths)
     act = hwp.CreateAction('TableCreate')
     pset = act.CreateSet()
@@ -2073,10 +2246,10 @@ def insert_table(hwp, header, rows):
             first_cell = False
             cell_text = row[ci] if ci < len(row) else ''
             if is_header:
-                set_para_shape(hwp, align=3)
+                set_para_shape(hwp, align=layout.style.header_align)
                 set_char_shape(hwp, height=1200, bold=True, font='table')
             else:
-                set_para_shape(hwp, align=1)
+                set_para_shape(hwp, align=layout.style.body_align)
                 set_char_shape(hwp, height=1200, font='table')
             if cell_text:
                 insert_text(hwp, cell_text)
@@ -2155,7 +2328,16 @@ def build_doc(hwp, blocks):
                 _blank_line(hwp)
             set_para_shape(hwp, align=0)
             set_char_shape(hwp, height=1200, font='table')
-            insert_table(hwp, blk.get('header'), blk.get('rows', []))
+            insert_table(
+                hwp,
+                blk.get('header'),
+                blk.get('rows', []),
+                table_role=blk.get('table_role'),
+                column_widths=blk.get('column_widths'),
+                table_source=blk.get('table_source'),
+                worksheet_title=blk.get('worksheet_title'),
+                merged_cells=blk.get('merged_cells') or blk.get('merges'),
+            )
             _blank_line(hwp)
 
         elif t == 'official_header':
@@ -2342,9 +2524,18 @@ def record_output_file(output_dir, output_file):
     write_output_manifest(out_dir, files)
 
 
-def convert_file(hwp, src_path, hwpx_path, insert_end_mark=False, kordoc_home=None):
+def convert_file(
+    hwp,
+    src_path,
+    hwpx_path,
+    insert_end_mark=False,
+    kordoc_home=None,
+    diagnose_stage: DiagnoseStageReporter | None = None,
+):
     src = as_path(src_path)
     out = as_path(hwpx_path)
+    if diagnose_stage:
+        diagnose_stage('parse_source')
     blocks = detect_and_parse(src, kordoc_home=kordoc_home)
     notes = pop_conversion_notes()
     if insert_end_mark:
@@ -2354,28 +2545,43 @@ def convert_file(hwp, src_path, hwpx_path, insert_end_mark=False, kordoc_home=No
         {
             'header': blk.get('header') or [],
             'rows': blk.get('rows') or [],
-            'merges': blk.get('merges') or [],
+            'table_role': blk.get('table_role') or '',
+            'column_widths': blk.get('column_widths') or [],
+            'table_source': blk.get('table_source') or '',
+            'worksheet_title': blk.get('worksheet_title') or '',
+            'merged_cells': blk.get('merged_cells') or blk.get('merges') or [],
         }
         for blk in blocks
         if blk.get('type') == 'table'
     ]
 
+    if diagnose_stage:
+        diagnose_stage('XHwpDocuments.Add')
     _com_call(lambda: hwp.XHwpDocuments.Add(isTab=False))
     time.sleep(0.5)
     doc = hwp.XHwpDocuments.Item(hwp.XHwpDocuments.Count - 1)
 
     try:
+        if diagnose_stage:
+            diagnose_stage('build_doc')
         build_doc(hwp, blocks)
-        _com_call(lambda: hwp.SaveAs(str(out), 'HWPX', ''))
+        if diagnose_stage:
+            diagnose_stage('SaveAs')
+        _com_call(lambda: hwp.SaveAs(str(out), 'HWPX', 'lock:false'))
         time.sleep(0.5)
     finally:
+        if diagnose_stage:
+            diagnose_stage('doc.Close')
         _com_call(lambda: doc.Close(isDirty=False))
         time.sleep(0.3)
+    if diagnose_stage:
+        diagnose_stage('postprocess')
     apply_official_page_margins(out)  # 여백 먼저 — 표 폭이 본문 폭 기준으로 계산되도록
     apply_table_layout_profiles(out, table_layouts)
     apply_list_hanging_indents(out)
-    apply_table_cell_merges(out, table_layouts)
-    apply_table_header_shading(out, table_layouts)
+    fix_body_text_prid(out)
+    if diagnose_stage:
+        diagnose_stage('finalize')
     ext = src.suffix.upper().lstrip('.')
     print(f'[완료] {ext} → {out.name}')
     return {'notes': notes}
@@ -2392,6 +2598,8 @@ def main(argv=None):
     parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입")
     parser.add_argument('--list-formats', action='store_true', help='지원 형식 목록 출력')
     parser.add_argument('--preflight', action='store_true', help='HWP COM 실행 가능 여부만 점검하고 종료')
+    parser.add_argument('--startup-timeout', type=int, default=45, help='HWP COM 시작 제한 시간(초)')
+    parser.add_argument('--diagnose-stages', action='store_true', help='실제 변환 hang 진단용 단계 로그 출력')
     parser.add_argument('--kordoc-home', default=None, help='스캔 PDF OCR용 kordoc-ai 경로 (또는 KORDOC_HOME 환경변수)')
     parser.add_argument('--_preflight-worker', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--_preflight-visible', action='store_true', help=argparse.SUPPRESS)
@@ -2411,7 +2619,7 @@ def main(argv=None):
 
     if args.preflight:
         try:
-            print(run_hwp_preflight(visible=False))
+            print(run_hwp_preflight(visible=False, timeout=args.startup_timeout))
             return 0
         except Exception as exc:
             print(f'[FAIL] {exc}', file=sys.stderr)
@@ -2439,12 +2647,18 @@ def main(argv=None):
                 src_path = as_path(src_arg)
                 hwpx_path = build_output_path(src_path, prepared_output_dir)
                 print(f'변환 중: {src_path.name} → {hwpx_path.name}')
+                diagnose_stage = None
+                if args.diagnose_stages:
+                    def diagnose_stage(stage):
+                        print(f'[diagnose] {stage}', flush=True)
+
                 convert_file(
                     hwp,
                     src_path,
                     hwpx_path,
                     insert_end_mark=args.insert_end_mark,
                     kordoc_home=args.kordoc_home,
+                    diagnose_stage=diagnose_stage,
                 )
                 record_output_file(prepared_output_dir, hwpx_path)
             except Exception as exc:

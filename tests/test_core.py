@@ -526,6 +526,69 @@ def read_header_intents(path):
     return intents
 
 
+def make_hwpx_with_header_and_paragraphs(path, left_val, paragraphs):
+    body = "".join(
+        f'<hp:p paraPrIDRef="{prid}"><hp:run><hp:t>{text}</hp:t></hp:run></hp:p>'
+        for prid, text in paragraphs
+    )
+    section_xml = (
+        f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        f'<hp:sec xmlns:hp="{HP_PARA_NS}">{body}</hp:sec>'
+    )
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("Contents/header.xml", make_list_header_xml(left_val).encode("utf-8"))
+        zf.writestr("Contents/section0.xml", section_xml.encode("utf-8"))
+
+
+def read_section_paragraph_refs(path):
+    with zipfile.ZipFile(path, "r") as zf:
+        section = ET.fromstring(zf.read("Contents/section0.xml"))
+    return [
+        (
+            para.get("paraPrIDRef"),
+            "".join(t.text or "" for t in para.iter(f"{{{HP_PARA_NS}}}t")),
+        )
+        for para in section.iter(f"{{{HP_PARA_NS}}}p")
+    ]
+
+
+class BodyTextParaPrFixTests(unittest.TestCase):
+    def test_keeps_list_item_and_resets_following_body(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hwpx_path = Path(tmp) / "body_prid.hwpx"
+            make_hwpx_with_header_and_paragraphs(
+                hwpx_path,
+                900,
+                [("20", "1. 목록"), ("20", "본문입니다")],
+            )
+            converter.fix_body_text_prid(hwpx_path)
+            paragraphs = read_section_paragraph_refs(hwpx_path)
+
+        self.assertEqual(paragraphs, [("20", "1. 목록"), ("0", "본문입니다")])
+
+    def test_treats_date_like_text_as_body_text(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hwpx_path = Path(tmp) / "date_prid.hwpx"
+            make_hwpx_with_header_and_paragraphs(
+                hwpx_path,
+                900,
+                [("20", "2026. 3. 1.부터 시행")],
+            )
+            converter.fix_body_text_prid(hwpx_path)
+            paragraphs = read_section_paragraph_refs(hwpx_path)
+
+        self.assertEqual(paragraphs, [("0", "2026. 3. 1.부터 시행")])
+
+    def test_keeps_roman_numbered_list_item(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            hwpx_path = Path(tmp) / "roman_prid.hwpx"
+            make_hwpx_with_header_and_paragraphs(hwpx_path, 620, [("20", "Ⅰ. 총칙")])
+            converter.fix_body_text_prid(hwpx_path)
+            paragraphs = read_section_paragraph_refs(hwpx_path)
+
+        self.assertEqual(paragraphs, [("20", "Ⅰ. 총칙")])
+
+
 class ListHangingIndentTests(unittest.TestCase):
     def test_apply_sets_intent_for_known_depth(self):
         """apply_list_hanging_indents sets hc:intent for depth=1 (left=900)."""
