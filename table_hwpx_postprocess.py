@@ -141,6 +141,34 @@ def _span_by_addr(layout: TableLayout) -> dict[tuple[int, int], list[int]]:
     return {(span[0], span[1]): span for span in layout.merged_cells if len(span) == 4}
 
 
+def _covered_addrs(spans: dict[tuple[int, int], list[int]]) -> set[tuple[int, int]]:
+    covered: set[tuple[int, int]] = set()
+    for (row, col), span in spans.items():
+        for ri in range(row, row + span[2]):
+            for ci in range(col, col + span[3]):
+                if (ri, ci) != (row, col):
+                    covered.add((ri, ci))
+    return covered
+
+
+def _remove_covered_cells(tbl: ET.Element, spans: dict[tuple[int, int], list[int]]) -> bool:
+    """병합 범위에 흡수된 피병합 셀을 제거 (HWPX 정상 병합 요건)."""
+    covered = _covered_addrs(spans)
+    if not covered:
+        return False
+    removed = False
+    for parent in list(tbl.iter()):
+        for tc in list(parent.findall("hp:tc", NS)):
+            cell_addr = tc.find("hp:cellAddr", NS)
+            if cell_addr is None:
+                continue
+            key = (_int_attr(cell_addr, "rowAddr", -1), _int_attr(cell_addr, "colAddr", -1))
+            if key in covered:
+                parent.remove(tc)
+                removed = True
+    return removed
+
+
 def _layout_for(layout: TableLayout | TableBlock, total_width: int) -> TableLayout:
     if isinstance(layout, TableLayout):
         return table_layout_for(
@@ -240,6 +268,7 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
                 tc.set("hasMargin", "1")
                 changed = _ensure_cell_margin(tc, layout) or changed
                 changed = _compact_cell_paragraphs(tc, cell_para_space) or changed
+            changed = _remove_covered_cells(tbl, spans) or changed
             changed = _compact_paragraph_after_table(root, tbl, after_para_space) or changed
         if header_root is not None and header_changed:
             _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(header_root, encoding="utf-8", xml_declaration=True))

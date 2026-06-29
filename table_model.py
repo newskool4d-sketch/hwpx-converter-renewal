@@ -2,25 +2,21 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final
 
 from hwpx_layout import TABLE_TOTAL_WIDTH
-from hwpx_layout import calc_col_widths
-from hwpx_layout import visual_width
 from table_grid import TableValue
 from table_grid import int_rows_value
-
-
-TABLE_ROLE_BASIC: Final = "basic"
-TABLE_ROLE_SCHEDULE: Final = "schedule"
-TABLE_ROLE_BUDGET: Final = "budget"
-SCHEDULE_COLUMN_WIDTHS: Final = (14, 14, 9, 49, 14)
-BUDGET_COLUMN_WIDTHS_BY_COUNT: Final = {3: (24, 50, 26), 4: (22, 42, 20, 16)}
-HEADER_FILL_COLOR: Final = 0xE7E7E7
-SCHEDULE_HEADER: Final = ("시작", "종료", "분", "내용", "담당")
-BUDGET_HEADER_TERMS: Final = ("예산", "예산액", "금액", "단가", "수량", "합계", "원", "amount", "price", "total")
-SCHEDULE_HEADER_TERMS: Final = ("시작", "종료", "시간", "시각", "일시", "분", "내용", "담당")
-DETAIL_HEADER_TERMS: Final = ("내용", "세부", "내역", "설명", "비고", "추진", "계획")
+from table_roles import HEADER_FILL_COLOR
+from table_roles import TABLE_ROLE_BASIC
+from table_roles import TABLE_ROLE_BUDGET
+from table_roles import TABLE_ROLE_COMPARISON
+from table_roles import TABLE_ROLE_CRITERIA
+from table_roles import TABLE_ROLE_PROGRAM_MATRIX
+from table_roles import TABLE_ROLE_SCHEDULE
+from table_roles import TABLE_ROLE_TASK_MATRIX
+from table_roles import TABLE_ROLE_TWO_COLUMN
+from table_roles import infer_table_role
+from table_roles import table_widths_for
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,28 +101,6 @@ def _scale_widths(widths: list[int], col_count: int, total_width: int) -> list[i
     return scaled
 
 
-def infer_table_role(header: list[str], rows: list[list[str]]) -> str:
-    normalized_header = tuple(cell.strip() for cell in header)
-    if normalized_header == SCHEDULE_HEADER:
-        return TABLE_ROLE_SCHEDULE
-    joined_header = " ".join(normalized_header).lower()
-    if any(term in joined_header for term in BUDGET_HEADER_TERMS):
-        return TABLE_ROLE_BUDGET
-    if len(normalized_header) >= 3 and any(term in joined_header for term in SCHEDULE_HEADER_TERMS):
-        return TABLE_ROLE_SCHEDULE
-    if len(normalized_header) == 5 and rows and all(":" in row[0] for row in rows if row):
-        return TABLE_ROLE_SCHEDULE
-    return TABLE_ROLE_BASIC
-
-
-def _role_profile(table_role: str, col_count: int) -> list[int]:
-    if table_role == TABLE_ROLE_SCHEDULE and col_count == len(SCHEDULE_COLUMN_WIDTHS):
-        return list(SCHEDULE_COLUMN_WIDTHS)
-    if table_role == TABLE_ROLE_BUDGET:
-        return list(BUDGET_COLUMN_WIDTHS_BY_COUNT.get(col_count, ()))
-    return []
-
-
 def _fit_width_count(widths: list[int], col_count: int, total_width: int) -> list[int]:
     if col_count <= 0:
         return []
@@ -138,47 +112,6 @@ def _fit_width_count(widths: list[int], col_count: int, total_width: int) -> lis
     diff = total_width - sum(result)
     if diff:
         result[max(range(len(result)), key=lambda index: result[index])] += diff
-    return result
-
-
-def _long_text_target_col(header: list[str], rows: list[list[str]], col_count: int) -> int:
-    scores: list[int] = []
-    for col_index in range(col_count):
-        header_text = header[col_index] if col_index < len(header) else ""
-        values = [row[col_index] for row in rows if col_index < len(row)]
-        score = max([visual_width(header_text), *[visual_width(value) for value in values]], default=0)
-        if any(term in header_text for term in DETAIL_HEADER_TERMS):
-            score += 18
-        scores.append(score)
-    if not scores or max(scores) < 48:
-        return -1
-    return max(range(len(scores)), key=lambda index: scores[index])
-
-
-def _expand_long_text_width(widths: list[int], header: list[str], rows: list[list[str]], total_width: int) -> list[int]:
-    target_col = _long_text_target_col(header, rows, len(widths))
-    if target_col < 0:
-        return widths
-    result = list(widths)
-    target_width = max(result[target_col], int(total_width * 0.55))
-    overflow = target_width - result[target_col]
-    if overflow <= 0:
-        return result
-    result[target_col] = target_width
-    min_width = max(800, int(total_width * 0.08))
-    shrinkable = [index for index in range(len(result)) if index != target_col and result[index] > min_width]
-    while overflow > 0 and shrinkable:
-        changed = False
-        for index in shrinkable:
-            if overflow <= 0:
-                break
-            if result[index] > min_width:
-                result[index] -= 1
-                overflow -= 1
-                changed = True
-        if not changed:
-            break
-    result[target_col] += total_width - sum(result)
     return result
 
 
@@ -195,9 +128,7 @@ def table_layout_for(
     col_count = _col_count(header, rows)
     role = table_role.strip() if table_role and table_role.strip() else infer_table_role(header, rows)
     explicit_widths = _scale_widths(column_widths or [], col_count, total_width)
-    role_widths = _scale_widths(_role_profile(role, col_count), col_count, total_width)
-    calculated_widths = calc_col_widths(header, rows, total=total_width)
-    widths = explicit_widths or role_widths or _expand_long_text_width(calculated_widths, header, rows, total_width)
+    widths = explicit_widths or table_widths_for(header, rows, role, col_count, total_width)
     return TableLayout(
         header=list(header),
         rows=[list(row) for row in rows],
