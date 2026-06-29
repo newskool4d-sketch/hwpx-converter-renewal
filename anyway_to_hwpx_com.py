@@ -4,7 +4,6 @@ HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX �
 """
 from pathlib import Path
 import argparse
-import copy
 import csv
 import json
 import os
@@ -1736,6 +1735,7 @@ def set_para_shape(hwp, align=0, space_before=0, space_after=0, indent_left=0, i
     act.GetDefault(pset)
     pset.SetItem('Align', align)
     # SpaceBefore/SpaceAfter: silently ignored by HWP COM — handled via XML post-processing if needed
+    # LineSpacing: 정본 §7-3 160% — COM 적용이 불확실하여 apply_official_line_spacing(header.xml)로 강제
     # LeftMargin works with 0.5× ratio (COM LeftMargin=X → hp:case hc:left=X/2)
     # Pass indent_left×2 so that hp:case stores indent_left exactly.
     # Always set explicitly (even 0) to prevent inheritance from the previous paragraph's LeftMargin.
@@ -1988,7 +1988,44 @@ _OFFICIAL_PAGE_MARGINS = {
     'header': round(10 * _MM_TO_HWPUNIT),
     'footer': round(10 * _MM_TO_HWPUNIT),
 }
-_TABLE_HEADER_FILL_COLOR = '#C8C8C8'  # 표 헤더 행 배경 회색 (규칙 8-2)
+_OFFICIAL_LINE_SPACING = 160  # 정본 §7-3: 줄 간격 160% (apply_official_line_spacing가 header.xml에 강제)
+
+
+def apply_official_line_spacing(hwpx_path):
+    """Post-process header.xml: 모든 단락 속성(paraPr)의 줄 간격을 160%로 강제 (정본 §7-3).
+
+    단락 속성은 header.xml의 hh:paraPr 정의에 저장되고 hp:p가 paraPrIDRef로 참조한다.
+    기존 hh:lineSpacing이 있으면 값만 갱신(자식 순서 위험 0), 없으면 switch 뒤에 삽입한다.
+    """
+    if not os.path.exists(hwpx_path):
+        return
+    header_name = 'Contents/header.xml'
+    ls_tag = f'{{{_NS_HH}}}lineSpacing'
+    switch_tag = f'{{{_NS_HP}}}switch'
+    try:
+        with zipfile.ZipFile(hwpx_path, 'r') as zf:
+            header_xml = zf.read(header_name)
+        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', header_xml[:4096]):
+            ET.register_namespace(prefix.decode(), uri.decode())
+        root = ET.fromstring(header_xml)
+        changed = False
+        for para_pr in root.iter(f'{{{_NS_HH}}}paraPr'):
+            line_spacing = para_pr.find(ls_tag)
+            if line_spacing is None:
+                line_spacing = ET.Element(ls_tag)
+                children = list(para_pr)
+                insert_at = len(children)
+                for index, child in enumerate(children):
+                    if child.tag == switch_tag:
+                        insert_at = index + 1
+                        break
+                para_pr.insert(insert_at, line_spacing)
+            if _set_attrs(line_spacing, {'type': 'PERCENT', 'value': str(_OFFICIAL_LINE_SPACING), 'unit': 'HWPUNIT'}):
+                changed = True
+        if changed:
+            _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
+    except Exception as e:
+        print(f'[경고] 줄 간격 후처리 실패: {e}', file=sys.stderr)
 
 
 def apply_official_page_margins(hwpx_path):
@@ -2015,76 +2052,6 @@ def apply_official_page_margins(hwpx_path):
             _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
     except Exception as e:
         print(f'[경고] 페이지 여백 후처리 실패: {e}', file=sys.stderr)
-
-
-def _make_gray_border_fill(source_fill, new_id):
-    """기존 borderFill을 복제해 회색 배경(fillBrush)을 추가한 사본 생성."""
-    clone = copy.deepcopy(source_fill)
-    clone.set('id', str(new_id))
-    fill_brush = clone.find(f'{{{_NS_HC}}}fillBrush')
-    if fill_brush is None:
-        fill_brush = ET.SubElement(clone, f'{{{_NS_HC}}}fillBrush')
-    win_brush = fill_brush.find(f'{{{_NS_HC}}}winBrush')
-    if win_brush is None:
-        win_brush = ET.SubElement(fill_brush, f'{{{_NS_HC}}}winBrush')
-        win_brush.set('hatchColor', '#999999')
-        win_brush.set('alpha', '0')
-    win_brush.set('faceColor', _TABLE_HEADER_FILL_COLOR)
-    return clone
-
-
-def apply_table_header_shading(hwpx_path, table_layouts):
-    """Post-process: 표 첫 행(헤더) 셀에 회색 배경 borderFill 적용 (규칙 8-2)."""
-    if not table_layouts or not os.path.exists(hwpx_path):
-        return
-    section_name = 'Contents/section0.xml'
-    header_name = 'Contents/header.xml'
-    try:
-        with zipfile.ZipFile(hwpx_path, 'r') as zf:
-            section_xml = zf.read(section_name)
-            header_xml = zf.read(header_name)
-        for source in (section_xml, header_xml):
-            for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', source[:4096]):
-                ET.register_namespace(prefix.decode(), uri.decode())
-
-        section_root = ET.fromstring(section_xml)
-        header_root = ET.fromstring(header_xml)
-
-        border_fills = header_root.find(f'.//{{{_NS_HH}}}borderFills')
-        if border_fills is None:
-            return
-        fills_by_id = {bf.get('id'): bf for bf in border_fills.findall(f'{{{_NS_HH}}}borderFill')}
-        max_id = max((int(i) for i in fills_by_id if i and i.isdigit()), default=0)
-
-        # 표마다 첫 행 셀의 borderFill을 회색 배경 사본으로 교체
-        gray_ids = {}  # 원본 id → 회색 사본 id
-        section_changed = False
-        tables = section_root.iter(f'{{{_NS_HP}}}tbl')
-        for tbl, layout in zip(tables, table_layouts):
-            header_cells, _ = _coerce_table_layout(layout)
-            if not header_cells:
-                continue
-            first_tr = tbl.find(f'{{{_NS_HP}}}tr')
-            if first_tr is None:
-                continue
-            for tc in first_tr.findall(f'{{{_NS_HP}}}tc'):
-                src_id = tc.get('borderFillIDRef')
-                if src_id is None or src_id not in fills_by_id:
-                    continue
-                if src_id not in gray_ids:
-                    max_id += 1
-                    border_fills.append(_make_gray_border_fill(fills_by_id[src_id], max_id))
-                    gray_ids[src_id] = str(max_id)
-                tc.set('borderFillIDRef', gray_ids[src_id])
-                section_changed = True
-
-        if not section_changed:
-            return
-        border_fills.set('itemCnt', str(len(border_fills.findall(f'{{{_NS_HH}}}borderFill'))))
-        _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(header_root, encoding='utf-8', xml_declaration=True))
-        _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(section_root, encoding='utf-8', xml_declaration=True))
-    except Exception as e:
-        print(f'[경고] 표 헤더 배경 후처리 실패: {e}', file=sys.stderr)
 
 
 def apply_table_cell_merges(hwpx_path, table_layouts):
@@ -2412,6 +2379,68 @@ def normalize_official_dates(blocks):
     return result
 
 
+_SINO_DIGITS = '영일이삼사오육칠팔구'
+_SINO_PLACE = ('', '십', '백', '천')
+_SINO_GROUP = ('', '만', '억', '조', '경')
+
+
+def _sino_korean_amount(value):
+    """정수를 한글 금액 표기로 변환 (정본 §1-2). 예: 113560 → 일십일만삼천오백육십.
+
+    각 자리 숫자를 모두 표기(일십·일백 형식)하는 공문 금액 표기 방식.
+    """
+    n = int(value)
+    if n == 0:
+        return '영'
+    sign = '마이너스' if n < 0 else ''
+    n = abs(n)
+    groups = []
+    while n > 0:
+        groups.append(n % 10000)
+        n //= 10000
+    parts = []
+    for index in range(len(groups) - 1, -1, -1):
+        group = groups[index]
+        if group == 0:
+            continue
+        digits = ''
+        for place in range(3, -1, -1):
+            digit = (group // (10 ** place)) % 10
+            if digit:
+                digits += _SINO_DIGITS[digit] + _SINO_PLACE[place]
+        parts.append(digits + _SINO_GROUP[index])
+    return sign + ''.join(parts)
+
+
+_OFFICIAL_AMOUNT_PATTERN = re.compile(
+    r'금?(\d{1,3}(?:,\d{3})+|\d+)\s*원(?!\s*\()'
+)
+
+
+def _format_official_amount(match):
+    raw = match.group(1)
+    digits = int(raw.replace(',', ''))
+    return f'금{raw}원(금{_sino_korean_amount(digits)}원)'
+
+
+def normalize_official_amounts(blocks):
+    """금액 표기 규칙 (정본 §1-2) — '113,560원' → '금113,560원(금일십일만삼천오백육십원)'.
+
+    이미 한글 병기된 금액(뒤에 '(...'가 오는 경우)은 건드리지 않는다.
+    """
+    result = []
+    for blk in blocks:
+        if blk.get('type') in ('p', 'li', 'bq', 'attachment', 'official_header', 'h') and blk.get('text'):
+            updated = dict(blk)
+            updated['text'] = _OFFICIAL_AMOUNT_PATTERN.sub(_format_official_amount, updated['text'])
+            if 'value' in updated and updated.get('value'):
+                updated['value'] = _OFFICIAL_AMOUNT_PATTERN.sub(_format_official_amount, updated['value'])
+            result.append(updated)
+        else:
+            result.append(blk)
+    return result
+
+
 # ─── 변환 실행 ─────────────────────────────────────────────────────────────────
 
 def build_output_path(src_path, output_dir):
@@ -2540,6 +2569,7 @@ def convert_file(
     notes = pop_conversion_notes()
     if insert_end_mark:
         blocks = normalize_official_dates(blocks)
+        blocks = normalize_official_amounts(blocks)
         blocks = append_end_mark_blocks(blocks)
     table_layouts = [
         {
@@ -2580,6 +2610,7 @@ def convert_file(
     apply_table_layout_profiles(out, table_layouts)
     apply_list_hanging_indents(out)
     fix_body_text_prid(out)
+    apply_official_line_spacing(out)  # 정본 §7-3: 줄 간격 160% (header.xml paraPr)
     if diagnose_stage:
         diagnose_stage('finalize')
     ext = src.suffix.upper().lstrip('.')

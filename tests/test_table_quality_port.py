@@ -163,12 +163,19 @@ class TableContractParserTests(unittest.TestCase):
 
 class TableLayoutContractTests(unittest.TestCase):
     def test_budget_role_uses_budget_width_profile(self):
+        # 정본 §8-4 재기준화: 고정 비율이 아니라 역할 프로파일 형태를 유지하되
+        # 내용 길이로 보정한다. 정확값 계약 → 속성(성격 보존·합계·밴드) 계약.
         from table_model import table_layout_for
 
         layout = table_layout_for(["항목", "산출내역", "예산액"], [["강사료", "2명 x 2시간", "400,000원"]], total_width=10000)
 
         self.assertEqual(layout.table_role, "budget")
-        self.assertEqual(layout.column_widths, [2400, 5000, 2600])
+        self.assertEqual(sum(layout.column_widths), 10000)
+        # 산출내역(본문 내용) 열이 가장 넓다 — 역할 프로파일 형태 보존
+        self.assertEqual(max(range(3), key=lambda i: layout.column_widths[i]), 1)
+        # 본문 열은 budget 프로파일 50% 밴드(−15%~+30%) 내
+        self.assertGreaterEqual(layout.column_widths[1], 4250)
+        self.assertLessEqual(layout.column_widths[1], 6500)
 
 
 class TableHwpxPostProcessTests(unittest.TestCase):
@@ -201,7 +208,7 @@ class TableHwpxPostProcessTests(unittest.TestCase):
             self.fail("expected first cell span and margin")
 
         self.assertEqual(border_fills.get("itemCnt"), "3")
-        self.assertEqual(header_brush.get("faceColor"), "#E7E7E7")
+        self.assertEqual(header_brush.get("faceColor"), "#C8C8C8")
         self.assertEqual(first_cell.get("header"), "1")
         self.assertEqual(first_cell.get("borderFillIDRef"), "3")
         self.assertEqual(last_cell.get("borderFillIDRef"), "2")
