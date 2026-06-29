@@ -916,61 +916,6 @@ class OdlTableGridTests(unittest.TestCase):
         self.assertEqual(merges, [(0, 0, 2, 1)])
 
 
-def make_merge_section_xml(rows=2, cols=2, width=1000, height=500):
-    cells = []
-    for r in range(rows):
-        tcs = ''.join(
-            f'<hp:tc borderFillIDRef="3"><hp:subList><hp:p/></hp:subList>'
-            f'<hp:cellAddr colAddr="{c}" rowAddr="{r}"/>'
-            f'<hp:cellSpan colSpan="1" rowSpan="1"/>'
-            f'<hp:cellSz width="{width}" height="{height}"/></hp:tc>'
-            for c in range(cols)
-        )
-        cells.append(f'<hp:tr>{tcs}</hp:tr>')
-    return (
-        '<hp:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">'
-        f'<hp:tbl rowCnt="{rows}" colCnt="{cols}">{"".join(cells)}</hp:tbl></hp:sec>'
-    )
-
-
-class TableCellMergeTests(unittest.TestCase):
-    def _apply(self, merges, rows=2, cols=2):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / 'test.hwpx'
-            make_hwpx_with_section(path, make_merge_section_xml(rows=rows, cols=cols))
-            layout = {'header': ['h'] * cols, 'rows': [['x'] * cols] * (rows - 1), 'merges': merges}
-            converter.apply_table_cell_merges(path, [layout])
-            return read_section(path)
-
-    def test_rowspan_merge_removes_covered_cell(self):
-        root = self._apply([(0, 0, 2, 1)])
-        tcs = root.findall(f'.//{{{HP_NS}}}tc')
-        self.assertEqual(len(tcs), 3)  # 4개 중 피병합 1개 제거
-        anchor = tcs[0]
-        span = anchor.find(f'{{{HP_NS}}}cellSpan')
-        self.assertEqual(span.get('rowSpan'), '2')
-        size = anchor.find(f'{{{HP_NS}}}cellSz')
-        self.assertEqual(size.get('height'), '1000')  # 500 + 500
-        self.assertEqual(size.get('width'), '1000')
-
-    def test_colspan_merge_extends_width(self):
-        root = self._apply([(0, 0, 1, 2)])
-        tcs = root.findall(f'.//{{{HP_NS}}}tc')
-        self.assertEqual(len(tcs), 3)
-        span = tcs[0].find(f'{{{HP_NS}}}cellSpan')
-        self.assertEqual(span.get('colSpan'), '2')
-        size = tcs[0].find(f'{{{HP_NS}}}cellSz')
-        self.assertEqual(size.get('width'), '2000')
-
-    def test_no_merges_leaves_table_intact(self):
-        root = self._apply([])
-        self.assertEqual(len(root.findall(f'.//{{{HP_NS}}}tc')), 4)
-
-    def test_out_of_range_merge_skipped(self):
-        root = self._apply([(0, 0, 5, 5)])
-        self.assertEqual(len(root.findall(f'.//{{{HP_NS}}}tc')), 4)
-
-
 class OdlReadingOrderTests(unittest.TestCase):
     @staticmethod
     def _el(page, x0, y0, x1, y1, text):

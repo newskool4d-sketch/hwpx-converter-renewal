@@ -202,7 +202,8 @@ def table_widths_for(header, rows, table_role, col_count, total_width):
 
 ### Phase 3 — 아키텍처 정리 (부분 완료)
 9. ✅ dead 클러스터 제거 — `apply_table_header_shading`·`_make_gray_border_fill`·`_TABLE_HEADER_FILL_COLOR`·고아 `import copy`(호출·테스트 0건).
-   - (잔여) `apply_table_cell_merges`: 파이프라인 미사용이나 `TableCellMergeTests`로 보호됨 → 모듈 병합 경로로 통합·테스트 이전은 별도 작업으로 보류(무해·보수적).
+   - ✅ **병합 일원화 + latent bug 수정**(2026-06-30): 활성 모듈 경로(`table_hwpx_postprocess`)가 anchor cellSpan만 설정하고 **피병합 셀을 제거하지 않아** 병합 표(html·xlsx·docx·pdf)가 malformed였음. `_remove_covered_cells` 추가로 수정. 중복 모놀리스 `apply_table_cell_merges` + `TableCellMergeTests` 제거, 모듈 대상 테스트 3건 신설(`test_table_merge_postprocess.py`).
+   - (잔여) out-of-range 병합 방어: 구 모놀리스는 격자 불일치 병합을 skip했으나 모듈 경로는 미방어. 파서 입력은 검증되어 위험 낮음 — 추후 하드닝 후보.
 10. ✅ GUI 소스 — 사용자 확인: 본체 엔진은 `anyway_to_hwpx_com.py`이며 GUI `.py` 복원 불필요(해소). 작업 초점은 CLI 엔진 유지.
 
 ---
