@@ -2369,6 +2369,45 @@ def normalize_official_amounts(blocks):
     return result
 
 
+# ─── 공공언어 스타일 린트 (정본 §1-1, 경고 수준·비강제) ──────────────────────────
+
+_STYLE_TEXT_TYPES = ('p', 'li', 'bq', 'attachment', 'official_header', 'h')
+
+# (피할 표현, 권장 표현, 뒤에 오면 제외할 접미사) — 정본 §1-1 공공언어 순화 예시
+_STYLE_LINT_RULES = (
+    ('금일', '오늘', None),
+    ('향후', '앞으로', None),
+    ('만전을 기해', '최선을 다할', None),
+    ('에 있어서', '에서', None),
+    ('에 위치한', '에 있는', None),
+    ('에 의거', '에 따름', None),
+    ('실시', '함/한다', '간'),  # '실시간'은 순화 대상 아님
+)
+
+
+def lint_official_style(blocks):
+    """정본 §1-1 공공언어 순화·병렬('및') 경고를 반환한다(비강제, 텍스트 미수정)."""
+    texts = []
+    for blk in blocks:
+        if blk.get('type') in _STYLE_TEXT_TYPES:
+            if blk.get('text'):
+                texts.append(blk['text'])
+            if blk.get('value'):
+                texts.append(blk['value'])
+    combined = '\n'.join(texts)
+    notes = []
+    for avoid, prefer, exclude in _STYLE_LINT_RULES:
+        if exclude:
+            found = re.search(re.escape(avoid) + f'(?!{re.escape(exclude)})', combined)
+        else:
+            found = avoid in combined
+        if found:
+            notes.append(f"[확인 필요] 공공언어 순화: '{avoid}' → '{prefer}' 권장 (정본 §1-1)")
+    if '및' in combined:
+        notes.append("[확인 필요] '및' 사용 — '와/과/·'로 병렬관계 명확화 검토 (정본 §1-1)")
+    return notes
+
+
 # ─── 변환 실행 ─────────────────────────────────────────────────────────────────
 
 def build_output_path(src_path, output_dir):
@@ -2498,6 +2537,7 @@ def convert_file(
     if insert_end_mark:
         blocks = normalize_official_dates(blocks)
         blocks = normalize_official_amounts(blocks)
+        notes.extend(lint_official_style(blocks))  # 정본 §1-1 순화 경고(비강제)
         blocks = append_end_mark_blocks(blocks)
     table_layouts = [
         {
