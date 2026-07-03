@@ -254,6 +254,6 @@ def table_widths_for(header, rows, table_role, col_count, total_width):
 - ✅ **부수 정규화** — 금액 한글병기(`금400,000원(금사십만원)`)·"끝" 표시·항목기호 정상.
 
 ### 잔여 (선택, HWP 육안)
-- **② 로마숫자**: `--doc-type sihaengmun` depth 재매핑의 실제 렌더(내어쓰기·정렬) 육안 검수 미실시(단위테스트 8건으로 로직 검증).
+- ✅ **② 로마숫자 실변환 검증(2026-07-03)**: `--doc-type sihaengmun`에서 `1.` 들여쓰기 left=900(depth1)→**620(depth0)**, `가.` 1320→960로 당겨짐을 출력 XML로 확인. 정본 §2-1대로 발화.
 - **④**: H1/H2가 본문과 paraPr을 공유하는 문서에서는 간격이 미적용(skip). 공유를 푸는 것은 build 단계에서 heading별 paraPr 강제 분리가 필요 — 후속 후보.
 - 공통: 렌더 육안 검수는 Windows+HWP 필요. XML 스키마/값 수준은 `python -m unittest discover -s tests`(153 green)로 검증됨.
