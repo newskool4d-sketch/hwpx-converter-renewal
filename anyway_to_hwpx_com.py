@@ -182,8 +182,14 @@ def _normalize_parsed_table(header, rows):
     return normalized[0], normalized[1:]
 
 
+# 항목체계 로마숫자 최상위 레벨 허용 여부(정본 §2-1).
+# True  = 계획서·보고서 관행(Ⅰ. 최상위, 기본값)
+# False = 대외 시행문(1.이 최상위, 로마숫자 미인식)
+_ALLOW_ROMAN_LEVEL = True
+
+
 def _detect_list_item(line):
-    return detect_official_list_item(line, _clean_inline)
+    return detect_official_list_item(line, _clean_inline, allow_roman=_ALLOW_ROMAN_LEVEL)
 
 
 _ATTACHMENT_HEAD_PATTERN = re.compile(r'^붙임\s*[::]?\s+(\S.*)$')
@@ -2595,6 +2601,10 @@ def main(argv=None):
     parser.add_argument('-o', '--output-dir', default=None, help='저장할 폴더 경로 (기본: 입력 파일과 같은 폴더)')
     parser.add_argument('--empty-output-folder', action='store_true', help='변환 전 앱 manifest가 관리하는 출력 폴더 파일만 비움')
     parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입")
+    parser.add_argument(
+        '--doc-type', choices=['plan', 'sihaengmun'], default='plan',
+        help='항목체계 최상위 레벨: plan=Ⅰ.(계획서·보고서, 기본) / sihaengmun=1.(대외 시행문, 로마숫자 미사용)',
+    )
     parser.add_argument('--list-formats', action='store_true', help='지원 형식 목록 출력')
     parser.add_argument('--preflight', action='store_true', help='HWP COM 실행 가능 여부만 점검하고 종료')
     parser.add_argument('--startup-timeout', type=int, default=45, help='HWP COM 시작 제한 시간(초)')
@@ -2628,6 +2638,9 @@ def main(argv=None):
         parser.error('변환할 파일 경로가 필요함')
     if args.empty_output_folder and not args.output_dir:
         parser.error('--empty-output-folder는 -o/--output-dir와 함께 사용해야 함')
+
+    global _ALLOW_ROMAN_LEVEL
+    _ALLOW_ROMAN_LEVEL = (args.doc_type != 'sihaengmun')  # 정본 §2-1 항목체계 최상위 레벨
 
     hwp = None
     failures = []

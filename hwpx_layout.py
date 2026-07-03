@@ -93,9 +93,21 @@ def normalize_table_rows(header: Sequence[CellValue], rows: Rows) -> tuple[list[
     return normalized, col_count
 
 
-def detect_official_list_item(line: str, clean_inline: Callable[[str], str]) -> dict[str, str | int] | None:
+# 시행문(대외) 항목체계: 정본 §2-1 8단계는 '1.'에서 시작한다.
+# 로마숫자(Ⅰ.) depth 0을 제거하고 나머지를 한 단계씩 당긴다.
+OFFICIAL_LIST_PATTERNS_NO_ROMAN: Final[tuple[tuple[int, re.Pattern[str]], ...]] = tuple(
+    (depth - 1, pattern) for depth, pattern in OFFICIAL_LIST_PATTERNS if depth >= 1
+)
+
+
+def detect_official_list_item(
+    line: str,
+    clean_inline: Callable[[str], str],
+    allow_roman: bool = True,
+) -> dict[str, str | int] | None:
     stripped = line.strip()
-    for depth, pattern in OFFICIAL_LIST_PATTERNS:
+    patterns = OFFICIAL_LIST_PATTERNS if allow_roman else OFFICIAL_LIST_PATTERNS_NO_ROMAN
+    for depth, pattern in patterns:
         match = pattern.match(stripped)
         if match is None:
             continue
