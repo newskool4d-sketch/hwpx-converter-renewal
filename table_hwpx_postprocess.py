@@ -141,6 +141,29 @@ def _span_by_addr(layout: TableLayout) -> dict[tuple[int, int], list[int]]:
     return {(span[0], span[1]): span for span in layout.merged_cells if len(span) == 4}
 
 
+def _filter_spans_to_grid(
+    spans: dict[tuple[int, int], list[int]], col_count: int, row_count: int
+) -> tuple[dict[tuple[int, int], list[int]], list[list[int]]]:
+    """격자 범위를 벗어나거나 크기가 비정상인 병합 span을 제거한다.
+
+    구 모놀리스는 격자 불일치 병합을 skip했으나 모듈 경로는 미방어였다.
+    범위를 넘는 span을 그대로 적용하면 colSpan/rowSpan이 격자를 초과해
+    malformed HWPX가 되고 피병합 셀이 잘못 제거된다.
+    """
+    valid: dict[tuple[int, int], list[int]] = {}
+    dropped: list[list[int]] = []
+    for key, span in spans.items():
+        row, col, row_span, col_span = span
+        if (
+            row < 0 or col < 0 or row_span < 1 or col_span < 1
+            or row + row_span > row_count or col + col_span > col_count
+        ):
+            dropped.append(span)
+            continue
+        valid[key] = span
+    return valid, dropped
+
+
 def _covered_addrs(spans: dict[tuple[int, int], list[int]]) -> set[tuple[int, int]]:
     covered: set[tuple[int, int]] = set()
     for (row, col), span in spans.items():
@@ -235,6 +258,9 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
                 tbl.set("borderFillIDRef", border_refs.body_id)
                 changed = True
             spans = _span_by_addr(layout)
+            spans, dropped_spans = _filter_spans_to_grid(spans, len(widths), len(row_heights))
+            if dropped_spans:
+                print(f"  [경고] 격자 범위를 벗어난 병합 {len(dropped_spans)}건 무시", file=sys.stderr)
             cell_para_space = calc_table_cell_para_space(layout.header, layout.rows, widths)
             after_para_space = calc_table_after_para_space(layout.header, layout.rows, widths)
             changed = _ensure_table_cell_margin(tbl, calc_table_cell_margin(layout.header, layout.rows, widths)) or changed

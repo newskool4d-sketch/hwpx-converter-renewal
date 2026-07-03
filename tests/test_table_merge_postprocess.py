@@ -5,6 +5,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 import anyway_to_hwpx_com as converter
+import table_hwpx_postprocess as tpp
 
 HP = "http://www.hancom.co.kr/hwpml/2011/paragraph"
 HH = "http://www.hancom.co.kr/hwpml/2011/head"
@@ -104,6 +105,60 @@ class ModularMergeRemovesCoveredCellsTests(unittest.TestCase):
                 root = ET.fromstring(zf.read("Contents/section0.xml"))
 
         self.assertEqual(len(root.findall(".//hp:tc", NS)), 6)
+
+
+class FilterSpansToGridTests(unittest.TestCase):
+    def test_valid_span_kept(self):
+        spans = {(0, 0): [0, 0, 1, 2]}
+        valid, dropped = tpp._filter_spans_to_grid(spans, col_count=3, row_count=2)
+        self.assertEqual(valid, spans)
+        self.assertEqual(dropped, [])
+
+    def test_colspan_overflow_dropped(self):
+        spans = {(0, 0): [0, 0, 1, 5]}
+        valid, dropped = tpp._filter_spans_to_grid(spans, col_count=3, row_count=2)
+        self.assertEqual(valid, {})
+        self.assertEqual(dropped, [[0, 0, 1, 5]])
+
+    def test_rowspan_overflow_dropped(self):
+        spans = {(0, 0): [0, 0, 5, 1]}
+        valid, dropped = tpp._filter_spans_to_grid(spans, col_count=3, row_count=2)
+        self.assertEqual(valid, {})
+
+    def test_negative_or_zero_span_dropped(self):
+        spans = {(0, 0): [0, 0, 0, 1], (1, 1): [-1, 0, 1, 1]}
+        valid, dropped = tpp._filter_spans_to_grid(spans, col_count=3, row_count=2)
+        self.assertEqual(valid, {})
+
+
+class OutOfRangeMergeGuardTests(unittest.TestCase):
+    def _apply(self, layout):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.hwpx"
+            write_hwpx(path, make_table_with_rows(rows=2, cols=3))
+            converter.apply_table_layout_profiles(path, [layout])
+            with zipfile.ZipFile(path, "r") as zf:
+                return ET.fromstring(zf.read("Contents/section0.xml"))
+
+    def test_colspan_overflow_ignored(self):
+        layout = {"header": ["a", "b", "c"], "rows": [["1", "2", "3"]], "merged_cells": [[0, 0, 1, 5]]}
+        root = self._apply(layout)
+        # 범위 초과 병합은 무시 → 6칸 모두 유지, colSpan 오염 없음
+        self.assertEqual(len(root.findall(".//hp:tc", NS)), 6)
+        anchor_span = root.findall(".//hp:tr", NS)[0].find("hp:tc/hp:cellSpan", NS)
+        self.assertEqual(anchor_span.get("colSpan"), "1")
+
+    def test_rowspan_overflow_ignored(self):
+        layout = {"header": ["a", "b", "c"], "rows": [["1", "2", "3"]], "merged_cells": [[0, 0, 5, 1]]}
+        root = self._apply(layout)
+        self.assertEqual(len(root.findall(".//hp:tc", NS)), 6)
+        anchor_span = root.findall(".//hp:tr", NS)[0].find("hp:tc/hp:cellSpan", NS)
+        self.assertEqual(anchor_span.get("rowSpan"), "1")
+
+    def test_valid_merge_still_works(self):
+        layout = {"header": ["구분", "", "예산액"], "rows": [["강사료", "산출", "400원"]], "merged_cells": [[0, 0, 1, 2]]}
+        root = self._apply(layout)
+        self.assertEqual(len(root.findall(".//hp:tc", NS)), 5)
 
 
 if __name__ == "__main__":

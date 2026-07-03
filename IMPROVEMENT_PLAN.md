@@ -198,12 +198,12 @@ def table_widths_for(header, rows, table_role, col_count, total_width):
 5. ✅ 헤더 음영 `#E7E7E7` → `#C8C8C8`(`table_roles.HEADER_FILL_COLOR`, 정본 §8-2). 테스트 갱신.
 6. ✅ 줄 간격 160% — **XML 후처리로 전환**(`apply_official_line_spacing`, header.xml `hh:paraPr`에 `hh:lineSpacing type=PERCENT value=160` 강제). 레퍼런스 HWP 출력 스키마와 동일 → 손상 위험 최소. 신규 테스트 2건. (COM 경로는 제거.) 시각 적용은 HWP open-test 권장이나 스키마 일치로 위험 낮음.
 7. ✅ 금액 한글 병기(§1-2) — `_sino_korean_amount` + `normalize_official_amounts`, `--insert-end-mark` 모드 연결. 신규 테스트 7건.
-8. (잔여) 단락 간격 XML 후처리 실효화, 로마숫자 레벨 옵션화 — 미착수.
+8. ✅ 단락 간격 XML 후처리 실효화(2026-07-03) — `apply_official_paragraph_spacing`. 제목 H1~H3 앞/뒤 간격을 header.xml paraPr margin(hc:prev/next)에 반영(1pt=100 HWPUNIT). 본문 0/0. 제목이 본문과 paraPr 공유 시 오적용 방지로 skip. ✅ 로마숫자 레벨 옵션화(2026-07-03) — `--doc-type {plan,sihaengmun}`.
 
 ### Phase 3 — 아키텍처 정리 (부분 완료)
 9. ✅ dead 클러스터 제거 — `apply_table_header_shading`·`_make_gray_border_fill`·`_TABLE_HEADER_FILL_COLOR`·고아 `import copy`(호출·테스트 0건).
    - ✅ **병합 일원화 + latent bug 수정**(2026-06-30): 활성 모듈 경로(`table_hwpx_postprocess`)가 anchor cellSpan만 설정하고 **피병합 셀을 제거하지 않아** 병합 표(html·xlsx·docx·pdf)가 malformed였음. `_remove_covered_cells` 추가로 수정. 중복 모놀리스 `apply_table_cell_merges` + `TableCellMergeTests` 제거, 모듈 대상 테스트 3건 신설(`test_table_merge_postprocess.py`).
-   - (잔여) out-of-range 병합 방어: 구 모놀리스는 격자 불일치 병합을 skip했으나 모듈 경로는 미방어. 파서 입력은 검증되어 위험 낮음 — 추후 하드닝 후보.
+   - ✅ out-of-range 병합 방어(2026-07-03) — `_filter_spans_to_grid`. 격자(열수·행수) 범위를 벗어나거나 크기가 비정상인 병합 span을 무시(구 모놀리스 skip 동작 복원). end-to-end 단위테스트 3건.
 10. ✅ GUI 소스 — 사용자 확인: 본체 엔진은 `anyway_to_hwpx_com.py`이며 GUI `.py` 복원 불필요(해소). 작업 초점은 CLI 엔진 유지.
 
 ---
@@ -232,3 +232,28 @@ def table_widths_for(header, rows, table_role, col_count, total_width):
 - 구현 순서: **Phase 0(레퍼런스 역산)** → Phase 1(표 폭 정본 준수) → Phase 2(서식 강화) → Phase 3(아키텍처 정리).
 - Phase 0는 읽기 전용 추출(COM 불요)이므로 즉시 착수 가능하며, 그 산출(`reference_metrics.md`)이 Phase 1 목표값을 고정한다.
 - Phase 1 착수 시 `superpowers:test-driven-development`(프로젝트 §4 개발 스킬 순서)로 계약 재기준화 테스트부터 작성.
+
+---
+
+## 8. Track C 서식 개선 완료 (2026-07-03, TDD)
+
+브랜치 `feature/track-c-format-improvements`. 4개 항목 test-first 구현, 전체 **153 tests green**, py_compile OK.
+
+| # | 항목 | 구현 | 정본 | 테스트 |
+| :-- | :-- | :-- | :-- | :-- |
+| ① | 공공언어 스타일 린트 | `lint_official_style` — 순화 표현·'및' 경고(비강제, 텍스트 미수정), '실시간' 오탐 가드 | §1-1 | test_official_style_lint (7) |
+| ② | 로마숫자 레벨 옵션화 | `--doc-type {plan,sihaengmun}` + `detect_official_list_item(allow_roman)` + 글로벌 `_ALLOW_ROMAN_LEVEL` | §2-1 | test_roman_level_option (8) |
+| ③ | 병합 격자 방어 | `_filter_spans_to_grid` — 범위 초과·비정상 span 무시(구 모놀리스 skip 복원) | §8 | test_table_merge_postprocess (신규 7) |
+| ④ | 제목 단락 간격 | `apply_official_paragraph_spacing` — H1 5/2.5·H2 4/2·H3 3/1.5pt(1pt=100 HWPUNIT), 본문 0/0, 공유 paraPr skip | §7-3 | test_official_paragraph_spacing (5) |
+
+### HWP 실변환 검수 결과 (2026-07-03)
+
+헤딩·목록·표·공문 표현을 담은 문서를 `--insert-end-mark`로 실제 HWP COM 변환하여 확인:
+- ✅ **④ 단락 간격 실발화 확인** — 배타적 H3 paraPr 2건에 `prev=300 next=150`(§7-3 H3 3/1.5pt) 적용. H1은 본문과 paraPr 공유(pp0)로 안전 skip + 참고 로그 1건. **핵심 잔여였던 "COM paraPr 배정" 의문 해소**: 배타 시 적용·공유 시 무해 skip이 실측 확인됨.
+- ✅ **① 스타일 린트** — CLI에 순화 경고 3건(금일·향후·및) 표시. (검수 중 `main()`이 notes를 미출력하던 결함 발견·수정.)
+- ✅ **부수 정규화** — 금액 한글병기(`금400,000원(금사십만원)`)·"끝" 표시·항목기호 정상.
+
+### 잔여 (선택, HWP 육안)
+- **② 로마숫자**: `--doc-type sihaengmun` depth 재매핑의 실제 렌더(내어쓰기·정렬) 육안 검수 미실시(단위테스트 8건으로 로직 검증).
+- **④**: H1/H2가 본문과 paraPr을 공유하는 문서에서는 간격이 미적용(skip). 공유를 푸는 것은 build 단계에서 heading별 paraPr 강제 분리가 필요 — 후속 후보.
+- 공통: 렌더 육안 검수는 Windows+HWP 필요. XML 스키마/값 수준은 `python -m unittest discover -s tests`(153 green)로 검증됨.

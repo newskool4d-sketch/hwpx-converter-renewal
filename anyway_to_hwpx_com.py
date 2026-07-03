@@ -182,8 +182,14 @@ def _normalize_parsed_table(header, rows):
     return normalized[0], normalized[1:]
 
 
+# 항목체계 로마숫자 최상위 레벨 허용 여부(정본 §2-1).
+# True  = 계획서·보고서 관행(Ⅰ. 최상위, 기본값)
+# False = 대외 시행문(1.이 최상위, 로마숫자 미인식)
+_ALLOW_ROMAN_LEVEL = True
+
+
 def _detect_list_item(line):
-    return detect_official_list_item(line, _clean_inline)
+    return detect_official_list_item(line, _clean_inline, allow_roman=_ALLOW_ROMAN_LEVEL)
 
 
 _ATTACHMENT_HEAD_PATTERN = re.compile(r'^붙임\s*[::]?\s+(\S.*)$')
@@ -2028,6 +2034,111 @@ def apply_official_line_spacing(hwpx_path):
         print(f'[경고] 줄 간격 후처리 실패: {e}', file=sys.stderr)
 
 
+# 정본 §7-3 제목 단락 간격 (앞, 뒤) — 1pt = 100 HWPUNIT
+_HEADING_SPACING = {
+    'H1': (500, 250),
+    'H2': (400, 200),
+    'H3': (300, 150),
+}
+
+
+def _charpr_level_map(header_root):
+    """charPr id → 제목 레벨('H1'/'H2'/'H3') 또는 None(본문). 정본 §7-1 크기 기준."""
+    level = {}
+    for cp in header_root.iter(f'{{{_NS_HH}}}charPr'):
+        cid = cp.get('id')
+        height = int(cp.get('height') or 0)
+        bold = cp.find(f'{{{_NS_HH}}}bold') is not None
+        if height >= 1600:
+            level[cid] = 'H1'
+        elif height >= 1400:
+            level[cid] = 'H2'
+        elif height >= 1300 and bold:
+            level[cid] = 'H3'
+        else:
+            level[cid] = None
+    return level
+
+
+def _apply_para_margin(para_pr, prev, nxt):
+    margins = list(para_pr.iter(f'{{{_NS_HH}}}margin'))
+    if not margins:
+        return False
+    changed = False
+    for margin in margins:
+        for tag, value in (('prev', prev), ('next', nxt)):
+            elem = margin.find(f'{{{_NS_HC}}}{tag}')
+            if elem is None:
+                elem = ET.SubElement(margin, f'{{{_NS_HC}}}{tag}')
+            if elem.get('value') != str(value) or elem.get('unit') != 'HWPUNIT':
+                elem.set('value', str(value))
+                elem.set('unit', 'HWPUNIT')
+                changed = True
+    return changed
+
+
+def _set_heading_para_spacing(header_root, section_root):
+    """제목 단락(H1~H3)에만 §7-3 앞/뒤 간격을 설정한다.
+
+    제목이 본문·다른 레벨과 paraPr을 공유하면 본문에 잘못 적용되지 않도록 건너뛴다.
+    반환: (changed, skipped) — skipped는 공유로 미적용된 paraPr 수.
+    """
+    char_level = _charpr_level_map(header_root)
+    usage = {}  # paraPrIDRef → 사용된 레벨 집합(None = 본문)
+    for p in section_root.iter(f'{{{_NS_HP}}}p'):
+        ppid = p.get('paraPrIDRef')
+        if ppid is None:
+            continue
+        plevel = None
+        for run in p.iter(f'{{{_NS_HP}}}run'):
+            lv = char_level.get(run.get('charPrIDRef'))
+            if lv is not None and (plevel is None or lv < plevel):  # H1<H2<H3 우선
+                plevel = lv
+        usage.setdefault(ppid, set()).add(plevel)
+    para_by_id = {e.get('id'): e for e in header_root.iter(f'{{{_NS_HH}}}paraPr')}
+    changed = False
+    skipped = 0
+    for ppid, levels in usage.items():
+        heading_levels = {lv for lv in levels if lv is not None}
+        if not heading_levels:
+            continue  # 본문 전용 paraPr → 변경 없음
+        if len(levels) == 1 and len(heading_levels) == 1:
+            para_pr = para_by_id.get(ppid)
+            prev, nxt = _HEADING_SPACING[next(iter(heading_levels))]
+            if para_pr is not None and _apply_para_margin(para_pr, prev, nxt):
+                changed = True
+        else:
+            skipped += 1  # 제목이 본문/타 레벨과 paraPr 공유 → 안전하게 미적용
+    return changed, skipped
+
+
+def apply_official_paragraph_spacing(hwpx_path):
+    """Post-process header.xml: 제목 단락 앞/뒤 간격 (정본 §7-3).
+
+    COM이 무시하는 SpaceBefore/After를 paraPr margin(hc:prev/next)으로 실제 반영한다.
+    본문은 0/0(무변경). 제목이 본문과 paraPr을 공유하는 경우는 건너뛰고 참고 로그를 남긴다.
+    """
+    if not os.path.exists(hwpx_path):
+        return
+    header_name = 'Contents/header.xml'
+    section_name = 'Contents/section0.xml'
+    try:
+        with zipfile.ZipFile(hwpx_path, 'r') as zf:
+            header_xml = zf.read(header_name)
+            section_xml = zf.read(section_name)
+        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', header_xml[:4096]):
+            ET.register_namespace(prefix.decode(), uri.decode())
+        header_root = ET.fromstring(header_xml)
+        section_root = ET.fromstring(section_xml)
+        changed, skipped = _set_heading_para_spacing(header_root, section_root)
+        if skipped:
+            print(f'  [참고] 제목 단락 간격: paraPr 공유로 {skipped}건 미적용 (§7-3)', file=sys.stderr)
+        if changed:
+            _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(header_root, encoding='utf-8', xml_declaration=True))
+    except Exception as e:
+        print(f'[경고] 단락 간격 후처리 실패: {e}', file=sys.stderr)
+
+
 def apply_official_page_margins(hwpx_path):
     """Post-process section0.xml: 공문서 페이지 여백 적용."""
     if not os.path.exists(hwpx_path):
@@ -2369,6 +2480,45 @@ def normalize_official_amounts(blocks):
     return result
 
 
+# ─── 공공언어 스타일 린트 (정본 §1-1, 경고 수준·비강제) ──────────────────────────
+
+_STYLE_TEXT_TYPES = ('p', 'li', 'bq', 'attachment', 'official_header', 'h')
+
+# (피할 표현, 권장 표현, 뒤에 오면 제외할 접미사) — 정본 §1-1 공공언어 순화 예시
+_STYLE_LINT_RULES = (
+    ('금일', '오늘', None),
+    ('향후', '앞으로', None),
+    ('만전을 기해', '최선을 다할', None),
+    ('에 있어서', '에서', None),
+    ('에 위치한', '에 있는', None),
+    ('에 의거', '에 따름', None),
+    ('실시', '함/한다', '간'),  # '실시간'은 순화 대상 아님
+)
+
+
+def lint_official_style(blocks):
+    """정본 §1-1 공공언어 순화·병렬('및') 경고를 반환한다(비강제, 텍스트 미수정)."""
+    texts = []
+    for blk in blocks:
+        if blk.get('type') in _STYLE_TEXT_TYPES:
+            if blk.get('text'):
+                texts.append(blk['text'])
+            if blk.get('value'):
+                texts.append(blk['value'])
+    combined = '\n'.join(texts)
+    notes = []
+    for avoid, prefer, exclude in _STYLE_LINT_RULES:
+        if exclude:
+            found = re.search(re.escape(avoid) + f'(?!{re.escape(exclude)})', combined)
+        else:
+            found = avoid in combined
+        if found:
+            notes.append(f"[확인 필요] 공공언어 순화: '{avoid}' → '{prefer}' 권장 (정본 §1-1)")
+    if '및' in combined:
+        notes.append("[확인 필요] '및' 사용 — '와/과/·'로 병렬관계 명확화 검토 (정본 §1-1)")
+    return notes
+
+
 # ─── 변환 실행 ─────────────────────────────────────────────────────────────────
 
 def build_output_path(src_path, output_dir):
@@ -2498,6 +2648,7 @@ def convert_file(
     if insert_end_mark:
         blocks = normalize_official_dates(blocks)
         blocks = normalize_official_amounts(blocks)
+        notes.extend(lint_official_style(blocks))  # 정본 §1-1 순화 경고(비강제)
         blocks = append_end_mark_blocks(blocks)
     table_layouts = [
         {
@@ -2539,6 +2690,7 @@ def convert_file(
     apply_list_hanging_indents(out)
     fix_body_text_prid(out)
     apply_official_line_spacing(out)  # 정본 §7-3: 줄 간격 160% (header.xml paraPr)
+    apply_official_paragraph_spacing(out)  # 정본 §7-3: 제목 단락 앞/뒤 간격 (header.xml paraPr)
     if diagnose_stage:
         diagnose_stage('finalize')
     ext = src.suffix.upper().lstrip('.')
@@ -2555,6 +2707,10 @@ def main(argv=None):
     parser.add_argument('-o', '--output-dir', default=None, help='저장할 폴더 경로 (기본: 입력 파일과 같은 폴더)')
     parser.add_argument('--empty-output-folder', action='store_true', help='변환 전 앱 manifest가 관리하는 출력 폴더 파일만 비움')
     parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입")
+    parser.add_argument(
+        '--doc-type', choices=['plan', 'sihaengmun'], default='plan',
+        help='항목체계 최상위 레벨: plan=Ⅰ.(계획서·보고서, 기본) / sihaengmun=1.(대외 시행문, 로마숫자 미사용)',
+    )
     parser.add_argument('--list-formats', action='store_true', help='지원 형식 목록 출력')
     parser.add_argument('--preflight', action='store_true', help='HWP COM 실행 가능 여부만 점검하고 종료')
     parser.add_argument('--startup-timeout', type=int, default=45, help='HWP COM 시작 제한 시간(초)')
@@ -2589,6 +2745,9 @@ def main(argv=None):
     if args.empty_output_folder and not args.output_dir:
         parser.error('--empty-output-folder는 -o/--output-dir와 함께 사용해야 함')
 
+    global _ALLOW_ROMAN_LEVEL
+    _ALLOW_ROMAN_LEVEL = (args.doc_type != 'sihaengmun')  # 정본 §2-1 항목체계 최상위 레벨
+
     hwp = None
     failures = []
     try:
@@ -2611,7 +2770,7 @@ def main(argv=None):
                     def diagnose_stage(stage):
                         print(f'[diagnose] {stage}', flush=True)
 
-                convert_file(
+                result = convert_file(
                     hwp,
                     src_path,
                     hwpx_path,
@@ -2619,6 +2778,8 @@ def main(argv=None):
                     kordoc_home=args.kordoc_home,
                     diagnose_stage=diagnose_stage,
                 )
+                for note in (result or {}).get('notes', []):
+                    print(f'  {note}', file=sys.stderr)
                 record_output_file(prepared_output_dir, hwpx_path)
             except Exception as exc:
                 failures.append((src_arg, exc))
