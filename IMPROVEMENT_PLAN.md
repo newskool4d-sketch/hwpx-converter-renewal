@@ -244,7 +244,7 @@ def table_widths_for(header, rows, table_role, col_count, total_width):
 | ① | 공공언어 스타일 린트 | `lint_official_style` — 순화 표현·'및' 경고(비강제, 텍스트 미수정), '실시간' 오탐 가드 | §1-1 | test_official_style_lint (7) |
 | ② | 로마숫자 레벨 옵션화 | `--doc-type {plan,sihaengmun}` + `detect_official_list_item(allow_roman)` + 글로벌 `_ALLOW_ROMAN_LEVEL` | §2-1 | test_roman_level_option (8) |
 | ③ | 병합 격자 방어 | `_filter_spans_to_grid` — 범위 초과·비정상 span 무시(구 모놀리스 skip 복원) | §8 | test_table_merge_postprocess (신규 7) |
-| ④ | 제목 단락 간격 | `apply_official_paragraph_spacing` — H1 5/2.5·H2 4/2·H3 3/1.5pt(1pt=100 HWPUNIT), 본문 0/0, 공유 paraPr skip | §7-3 | test_official_paragraph_spacing (5) |
+| ④ | 제목 단락 간격 | `apply_official_paragraph_spacing` — H1 5/2.5·H2 4/2·H3 3/1.5pt(1pt=100 HWPUNIT), 본문 0/0. 공유 paraPr은 레벨별 clone·재배정으로 **전면 적용**(2026-07-03) | §7-3 | test_official_paragraph_spacing (9) |
 
 ### HWP 실변환 검수 결과 (2026-07-03)
 
@@ -255,5 +255,5 @@ def table_widths_for(header, rows, table_role, col_count, total_width):
 
 ### 잔여 (선택, HWP 육안)
 - ✅ **② 로마숫자 실변환 검증(2026-07-03)**: `--doc-type sihaengmun`에서 `1.` 들여쓰기 left=900(depth1)→**620(depth0)**, `가.` 1320→960로 당겨짐을 출력 XML로 확인. 정본 §2-1대로 발화.
-- **④**: H1/H2가 본문과 paraPr을 공유하는 문서에서는 간격이 미적용(skip). 공유를 푸는 것은 build 단계에서 heading별 paraPr 강제 분리가 필요 — 후속 후보.
+- ✅ **④ 전면 적용(2026-07-03)**: 공유 paraPr을 레벨별 clone하여 제목에만 재배정(본문 0/0 보존). HWP 실변환 검증 — H1 500/250·H2 400/200·H3 300/150이 clone(pp20/21/22)에 적용됨. TDD 중 파일 라운드트립 버그(section0.xml 미기록) 발견·수정. (기존 skip 방식 → clone 방식 재기준화)
 - 공통: 렌더 육안 검수는 Windows+HWP 필요. XML 스키마/값 수준은 `python -m unittest discover -s tests`(153 green)로 검증됨.

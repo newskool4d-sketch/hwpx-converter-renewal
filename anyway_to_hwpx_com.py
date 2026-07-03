@@ -4,6 +4,7 @@ HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX �
 """
 from pathlib import Path
 import argparse
+import copy
 import csv
 import json
 import os
@@ -2078,12 +2079,13 @@ def _apply_para_margin(para_pr, prev, nxt):
 
 
 def _set_heading_para_spacing(header_root, section_root):
-    """제목 단락(H1~H3)에만 §7-3 앞/뒤 간격을 설정한다.
+    """제목 단락(H1~H3)에 §7-3 앞/뒤 간격을 설정한다.
 
-    제목이 본문·다른 레벨과 paraPr을 공유하면 본문에 잘못 적용되지 않도록 건너뛴다.
-    반환: (changed, skipped) — skipped는 공유로 미적용된 paraPr 수.
+    제목 paraPr이 본문·타 레벨과 공유되면 clone을 만들어 제목 단락에만 재배정한다
+    (본문 0/0 보존). 반환: (changed, cloned) — cloned는 새로 만든 paraPr 수.
     """
     char_level = _charpr_level_map(header_root)
+    para_info = []  # (p_elem, ppid, level)
     usage = {}  # paraPrIDRef → 사용된 레벨 집합(None = 본문)
     for p in section_root.iter(f'{{{_NS_HP}}}p'):
         ppid = p.get('paraPrIDRef')
@@ -2094,29 +2096,62 @@ def _set_heading_para_spacing(header_root, section_root):
             lv = char_level.get(run.get('charPrIDRef'))
             if lv is not None and (plevel is None or lv < plevel):  # H1<H2<H3 우선
                 plevel = lv
+        para_info.append((p, ppid, plevel))
         usage.setdefault(ppid, set()).add(plevel)
+
     para_by_id = {e.get('id'): e for e in header_root.iter(f'{{{_NS_HH}}}paraPr')}
+    container = header_root.find(f'.//{{{_NS_HH}}}paraProperties')
+    existing_ids = [int(i) for i in para_by_id if str(i).isdigit()]
+    next_id = (max(existing_ids) + 1) if existing_ids else 0
+
     changed = False
-    skipped = 0
+    cloned = 0
+    clone_map = {}  # (원본 ppid, level) → 새 paraPr id
     for ppid, levels in usage.items():
         heading_levels = {lv for lv in levels if lv is not None}
         if not heading_levels:
             continue  # 본문 전용 paraPr → 변경 없음
         if len(levels) == 1 and len(heading_levels) == 1:
+            # 배타적 제목 paraPr → 제자리 설정
             para_pr = para_by_id.get(ppid)
             prev, nxt = _HEADING_SPACING[next(iter(heading_levels))]
             if para_pr is not None and _apply_para_margin(para_pr, prev, nxt):
                 changed = True
         else:
-            skipped += 1  # 제목이 본문/타 레벨과 paraPr 공유 → 안전하게 미적용
-    return changed, skipped
+            # 본문·타 레벨과 공유 → 레벨별 clone 생성
+            source = para_by_id.get(ppid)
+            if source is None or container is None:
+                continue
+            for level in heading_levels:
+                clone = copy.deepcopy(source)
+                new_id = str(next_id)
+                next_id += 1
+                clone.set('id', new_id)
+                prev, nxt = _HEADING_SPACING[level]
+                _apply_para_margin(clone, prev, nxt)
+                container.append(clone)
+                para_by_id[new_id] = clone
+                clone_map[(ppid, level)] = new_id
+                cloned += 1
+                changed = True
+
+    # 공유였던 제목 단락을 clone으로 재배정 (본문은 원본 유지)
+    for p, ppid, level in para_info:
+        if level is not None and (ppid, level) in clone_map:
+            p.set('paraPrIDRef', clone_map[(ppid, level)])
+
+    if cloned and container is not None and container.get('itemCnt') is not None:
+        container.set('itemCnt', str(len(container.findall(f'{{{_NS_HH}}}paraPr'))))
+
+    return changed, cloned
 
 
 def apply_official_paragraph_spacing(hwpx_path):
     """Post-process header.xml: 제목 단락 앞/뒤 간격 (정본 §7-3).
 
     COM이 무시하는 SpaceBefore/After를 paraPr margin(hc:prev/next)으로 실제 반영한다.
-    본문은 0/0(무변경). 제목이 본문과 paraPr을 공유하는 경우는 건너뛰고 참고 로그를 남긴다.
+    본문은 0/0(무변경). 제목이 본문과 paraPr을 공유하면 clone을 만들어 제목 단락에만
+    재배정하므로, 이 경우 header.xml(clone 추가)과 section0.xml(재배정) 모두 다시 쓴다.
     """
     if not os.path.exists(hwpx_path):
         return
@@ -2126,15 +2161,19 @@ def apply_official_paragraph_spacing(hwpx_path):
         with zipfile.ZipFile(hwpx_path, 'r') as zf:
             header_xml = zf.read(header_name)
             section_xml = zf.read(section_name)
-        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', header_xml[:4096]):
-            ET.register_namespace(prefix.decode(), uri.decode())
+        for xml in (header_xml, section_xml):
+            for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', xml[:4096]):
+                ET.register_namespace(prefix.decode(), uri.decode())
         header_root = ET.fromstring(header_xml)
         section_root = ET.fromstring(section_xml)
-        changed, skipped = _set_heading_para_spacing(header_root, section_root)
-        if skipped:
-            print(f'  [참고] 제목 단락 간격: paraPr 공유로 {skipped}건 미적용 (§7-3)', file=sys.stderr)
+        changed, cloned = _set_heading_para_spacing(header_root, section_root)
+        if cloned:
+            print(f'  [참고] 제목 단락 간격: 공유 paraPr {cloned}건 분리 적용 (§7-3)', file=sys.stderr)
         if changed:
             _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(header_root, encoding='utf-8', xml_declaration=True))
+        if cloned:
+            # clone 재배정은 section0.xml의 paraPrIDRef를 바꾸므로 반드시 함께 기록
+            _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(section_root, encoding='utf-8', xml_declaration=True))
     except Exception as e:
         print(f'[경고] 단락 간격 후처리 실패: {e}', file=sys.stderr)
 
