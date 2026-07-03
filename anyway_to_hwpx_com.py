@@ -2523,9 +2523,10 @@ def normalize_official_amounts(blocks):
 
 _STYLE_TEXT_TYPES = ('p', 'li', 'bq', 'attachment', 'official_header', 'h')
 
-# (피할 표현, 권장 표현, 뒤에 오면 제외할 접미사) — 정본 §1-1 공공언어 순화 예시
+# (피할 표현, 권장 표현, 뒤에 오면 제외할 접미사 정규식) — 정본 §1-1 공공언어 순화 예시
 _STYLE_LINT_RULES = (
-    ('금일', '오늘', None),
+    # '금일'은 금액 한글병기(금일백·금일십·금일원 등)의 Sino 표기와 충돌 → 금액 접미사 제외
+    ('금일', '오늘', '[백십천만억조경원]'),
     ('향후', '앞으로', None),
     ('만전을 기해', '최선을 다할', None),
     ('에 있어서', '에서', None),
@@ -2548,7 +2549,8 @@ def lint_official_style(blocks):
     notes = []
     for avoid, prefer, exclude in _STYLE_LINT_RULES:
         if exclude:
-            found = re.search(re.escape(avoid) + f'(?!{re.escape(exclude)})', combined)
+            # exclude는 정규식 조각(문자클래스 허용) — negative lookahead로 제외
+            found = re.search(re.escape(avoid) + f'(?!{exclude})', combined)
         else:
             found = avoid in combined
         if found:

@@ -41,6 +41,18 @@ class LintOfficialStyleTests(unittest.TestCase):
         geumil_notes = [n for n in notes if "금일" in n]
         self.assertEqual(len(geumil_notes), 1, notes)
 
+    def test_sino_amount_reading_not_flagged_as_geumil(self):
+        # 금액 한글병기 '금일백육십만원' 속 '금일'은 순화 대상 '금일(오늘)'이 아니다
+        blocks = [{"type": "p", "text": "강사료 금1,600,000원(금일백육십만원) 지급"}]
+        notes = converter.lint_official_style(blocks)
+        self.assertFalse(any("금일" in n for n in notes), notes)
+
+    def test_real_geumil_still_flagged(self):
+        # 진짜 '금일 회의'는 여전히 경고
+        blocks = [{"type": "p", "text": "금일 회의를 개최함."}]
+        notes = converter.lint_official_style(blocks)
+        self.assertTrue(_has(notes, "금일", "오늘"), notes)
+
     def test_silsigan_is_not_flagged(self):
         # '실시간'은 순화 대상 '실시'가 아니다(오탐 방지)
         blocks = [{"type": "p", "text": "실시간 모니터링을 한다."}]
