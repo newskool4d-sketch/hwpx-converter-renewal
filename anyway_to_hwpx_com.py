@@ -2034,6 +2034,111 @@ def apply_official_line_spacing(hwpx_path):
         print(f'[경고] 줄 간격 후처리 실패: {e}', file=sys.stderr)
 
 
+# 정본 §7-3 제목 단락 간격 (앞, 뒤) — 1pt = 100 HWPUNIT
+_HEADING_SPACING = {
+    'H1': (500, 250),
+    'H2': (400, 200),
+    'H3': (300, 150),
+}
+
+
+def _charpr_level_map(header_root):
+    """charPr id → 제목 레벨('H1'/'H2'/'H3') 또는 None(본문). 정본 §7-1 크기 기준."""
+    level = {}
+    for cp in header_root.iter(f'{{{_NS_HH}}}charPr'):
+        cid = cp.get('id')
+        height = int(cp.get('height') or 0)
+        bold = cp.find(f'{{{_NS_HH}}}bold') is not None
+        if height >= 1600:
+            level[cid] = 'H1'
+        elif height >= 1400:
+            level[cid] = 'H2'
+        elif height >= 1300 and bold:
+            level[cid] = 'H3'
+        else:
+            level[cid] = None
+    return level
+
+
+def _apply_para_margin(para_pr, prev, nxt):
+    margins = list(para_pr.iter(f'{{{_NS_HH}}}margin'))
+    if not margins:
+        return False
+    changed = False
+    for margin in margins:
+        for tag, value in (('prev', prev), ('next', nxt)):
+            elem = margin.find(f'{{{_NS_HC}}}{tag}')
+            if elem is None:
+                elem = ET.SubElement(margin, f'{{{_NS_HC}}}{tag}')
+            if elem.get('value') != str(value) or elem.get('unit') != 'HWPUNIT':
+                elem.set('value', str(value))
+                elem.set('unit', 'HWPUNIT')
+                changed = True
+    return changed
+
+
+def _set_heading_para_spacing(header_root, section_root):
+    """제목 단락(H1~H3)에만 §7-3 앞/뒤 간격을 설정한다.
+
+    제목이 본문·다른 레벨과 paraPr을 공유하면 본문에 잘못 적용되지 않도록 건너뛴다.
+    반환: (changed, skipped) — skipped는 공유로 미적용된 paraPr 수.
+    """
+    char_level = _charpr_level_map(header_root)
+    usage = {}  # paraPrIDRef → 사용된 레벨 집합(None = 본문)
+    for p in section_root.iter(f'{{{_NS_HP}}}p'):
+        ppid = p.get('paraPrIDRef')
+        if ppid is None:
+            continue
+        plevel = None
+        for run in p.iter(f'{{{_NS_HP}}}run'):
+            lv = char_level.get(run.get('charPrIDRef'))
+            if lv is not None and (plevel is None or lv < plevel):  # H1<H2<H3 우선
+                plevel = lv
+        usage.setdefault(ppid, set()).add(plevel)
+    para_by_id = {e.get('id'): e for e in header_root.iter(f'{{{_NS_HH}}}paraPr')}
+    changed = False
+    skipped = 0
+    for ppid, levels in usage.items():
+        heading_levels = {lv for lv in levels if lv is not None}
+        if not heading_levels:
+            continue  # 본문 전용 paraPr → 변경 없음
+        if len(levels) == 1 and len(heading_levels) == 1:
+            para_pr = para_by_id.get(ppid)
+            prev, nxt = _HEADING_SPACING[next(iter(heading_levels))]
+            if para_pr is not None and _apply_para_margin(para_pr, prev, nxt):
+                changed = True
+        else:
+            skipped += 1  # 제목이 본문/타 레벨과 paraPr 공유 → 안전하게 미적용
+    return changed, skipped
+
+
+def apply_official_paragraph_spacing(hwpx_path):
+    """Post-process header.xml: 제목 단락 앞/뒤 간격 (정본 §7-3).
+
+    COM이 무시하는 SpaceBefore/After를 paraPr margin(hc:prev/next)으로 실제 반영한다.
+    본문은 0/0(무변경). 제목이 본문과 paraPr을 공유하는 경우는 건너뛰고 참고 로그를 남긴다.
+    """
+    if not os.path.exists(hwpx_path):
+        return
+    header_name = 'Contents/header.xml'
+    section_name = 'Contents/section0.xml'
+    try:
+        with zipfile.ZipFile(hwpx_path, 'r') as zf:
+            header_xml = zf.read(header_name)
+            section_xml = zf.read(section_name)
+        for prefix, uri in re.findall(rb'xmlns:(\w+)="([^"]+)"', header_xml[:4096]):
+            ET.register_namespace(prefix.decode(), uri.decode())
+        header_root = ET.fromstring(header_xml)
+        section_root = ET.fromstring(section_xml)
+        changed, skipped = _set_heading_para_spacing(header_root, section_root)
+        if skipped:
+            print(f'  [참고] 제목 단락 간격: paraPr 공유로 {skipped}건 미적용 (§7-3)', file=sys.stderr)
+        if changed:
+            _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(header_root, encoding='utf-8', xml_declaration=True))
+    except Exception as e:
+        print(f'[경고] 단락 간격 후처리 실패: {e}', file=sys.stderr)
+
+
 def apply_official_page_margins(hwpx_path):
     """Post-process section0.xml: 공문서 페이지 여백 적용."""
     if not os.path.exists(hwpx_path):
@@ -2585,6 +2690,7 @@ def convert_file(
     apply_list_hanging_indents(out)
     fix_body_text_prid(out)
     apply_official_line_spacing(out)  # 정본 §7-3: 줄 간격 160% (header.xml paraPr)
+    apply_official_paragraph_spacing(out)  # 정본 §7-3: 제목 단락 앞/뒤 간격 (header.xml paraPr)
     if diagnose_stage:
         diagnose_stage('finalize')
     ext = src.suffix.upper().lstrip('.')
