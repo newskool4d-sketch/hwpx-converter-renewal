@@ -246,8 +246,14 @@ def table_widths_for(header, rows, table_role, col_count, total_width):
 | ③ | 병합 격자 방어 | `_filter_spans_to_grid` — 범위 초과·비정상 span 무시(구 모놀리스 skip 복원) | §8 | test_table_merge_postprocess (신규 7) |
 | ④ | 제목 단락 간격 | `apply_official_paragraph_spacing` — H1 5/2.5·H2 4/2·H3 3/1.5pt(1pt=100 HWPUNIT), 본문 0/0, 공유 paraPr skip | §7-3 | test_official_paragraph_spacing (5) |
 
-### 검증 한계 (잔여, HWP 육안 필요)
-- **④ 단락 간격**: XML 스키마/값 수준으로만 검증(합성 XML). `apply_official_line_spacing`과 동일 위험 프로파일.
-  - **핵심 잔여**: COM이 제목에 **본문과 별개의 paraPr을 배정하는지 미확인**. 배정하면 간격 적용, 공유하면 안전하게 no-op(참고 로그). 실제 heading 문서를 HWP로 변환·검수해 발화 여부 확인 필요.
-- **② 로마숫자**: `--doc-type sihaengmun` 시 depth 재매핑의 실제 렌더(내어쓰기·정렬) HWP 검수 미실시.
-- 공통: 모든 후처리는 `python -m unittest discover -s tests`로 검증 가능하나 한글 실제 렌더 육안 검수는 Windows+HWP 필요.
+### HWP 실변환 검수 결과 (2026-07-03)
+
+헤딩·목록·표·공문 표현을 담은 문서를 `--insert-end-mark`로 실제 HWP COM 변환하여 확인:
+- ✅ **④ 단락 간격 실발화 확인** — 배타적 H3 paraPr 2건에 `prev=300 next=150`(§7-3 H3 3/1.5pt) 적용. H1은 본문과 paraPr 공유(pp0)로 안전 skip + 참고 로그 1건. **핵심 잔여였던 "COM paraPr 배정" 의문 해소**: 배타 시 적용·공유 시 무해 skip이 실측 확인됨.
+- ✅ **① 스타일 린트** — CLI에 순화 경고 3건(금일·향후·및) 표시. (검수 중 `main()`이 notes를 미출력하던 결함 발견·수정.)
+- ✅ **부수 정규화** — 금액 한글병기(`금400,000원(금사십만원)`)·"끝" 표시·항목기호 정상.
+
+### 잔여 (선택, HWP 육안)
+- **② 로마숫자**: `--doc-type sihaengmun` depth 재매핑의 실제 렌더(내어쓰기·정렬) 육안 검수 미실시(단위테스트 8건으로 로직 검증).
+- **④**: H1/H2가 본문과 paraPr을 공유하는 문서에서는 간격이 미적용(skip). 공유를 푸는 것은 build 단계에서 heading별 paraPr 강제 분리가 필요 — 후속 후보.
+- 공통: 렌더 육안 검수는 Windows+HWP 필요. XML 스키마/값 수준은 `python -m unittest discover -s tests`(153 green)로 검증됨.
