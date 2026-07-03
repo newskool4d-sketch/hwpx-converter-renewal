@@ -2770,7 +2770,7 @@ def main(argv=None):
                     def diagnose_stage(stage):
                         print(f'[diagnose] {stage}', flush=True)
 
-                convert_file(
+                result = convert_file(
                     hwp,
                     src_path,
                     hwpx_path,
@@ -2778,6 +2778,8 @@ def main(argv=None):
                     kordoc_home=args.kordoc_home,
                     diagnose_stage=diagnose_stage,
                 )
+                for note in (result or {}).get('notes', []):
+                    print(f'  {note}', file=sys.stderr)
                 record_output_file(prepared_output_dir, hwpx_path)
             except Exception as exc:
                 failures.append((src_arg, exc))
