@@ -1,6 +1,16 @@
 # HWPX Converter Renewal
 
+**English** | [한국어](README.ko.md)
+
 Markdown, TXT, DOCX, HTML, CSV, XLSX, and PDF files can be converted to HWPX through Hancom HWP COM automation.
+
+## Download
+
+Get the standalone GUI executable from the [latest release](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/latest):
+
+- **`anyway_to_hwpx_gui.exe`** — no installation required (Windows 64-bit, Hancom Office HWP must be installed)
+
+Download it, run it, select source files, choose an output folder, and start conversion.
 
 ## User Guide
 
