@@ -11,3 +11,6 @@ handoff.md
 # PyInstaller local cache artifacts
 *.toc
 *.pkg
+
+# 개발 워크플로 메타데이터 (task ledger·evidence·QA 스크린샷)
+.omo/
