@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "C:\Users\È«ÁÖÇü\.claude\hwpx-converter-renewal\tests\gui_state_harness.py", line 7, in <module>
+    from anyway_to_hwpx_gui import ConverterApp
+ModuleNotFoundError: No module named 'anyway_to_hwpx_gui'

@@ -25,8 +25,8 @@ class TableCellStyle:
     body_align: int = 1
     header_fill_color: int = HEADER_FILL_COLOR
     border_width: int = 10
-    margin_left: int = 170
-    margin_right: int = 170
+    margin_left: int = 510  # 정본 §8-6: 셀 좌우 안여백 1.8mm
+    margin_right: int = 510
     margin_top: int = 120
     margin_bottom: int = 120
 

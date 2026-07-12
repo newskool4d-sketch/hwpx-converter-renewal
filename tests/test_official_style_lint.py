@@ -65,5 +65,42 @@ class LintOfficialStyleTests(unittest.TestCase):
         self.assertEqual(notes, [])
 
 
+class LintMoneyNotationTests(unittest.TestCase):
+    """정본 §1-2 금액 표기 — '천원' 축약 경고 (kordoc 표기법 린트 대응).
+
+    금액은 '천원'으로 줄이지 않고 아라비아 숫자로 적는다(예: 345,000원).
+    예산액은 대부분 표 안에 나오므로 표 셀까지 스캔한다.
+    """
+
+    def test_flags_cheonwon_in_text_block(self):
+        blocks = [{"type": "p", "text": "강사료 400천원 지급"}]
+        notes = converter.lint_money_notation(blocks)
+        self.assertTrue(_has(notes, "천원"), notes)
+
+    def test_flags_cheonwon_with_comma_in_table_cell(self):
+        blocks = [{"type": "table", "header": ["항목", "예산"], "rows": [["강사료", "3,400천원"]]}]
+        notes = converter.lint_money_notation(blocks)
+        self.assertTrue(_has(notes, "천원"), notes)
+
+    def test_clean_amount_not_flagged(self):
+        blocks = [{"type": "p", "text": "강사료 345,000원 지급"}]
+        notes = converter.lint_money_notation(blocks)
+        self.assertEqual(notes, [])
+
+    def test_cheonwon_without_leading_digit_not_flagged(self):
+        # '수천원'·'천원짜리'처럼 숫자가 앞에 없는 경우는 축약 표기가 아님
+        blocks = [{"type": "p", "text": "수천원 규모의 소액 지출"}]
+        notes = converter.lint_money_notation(blocks)
+        self.assertEqual(notes, [])
+
+    def test_reported_once_across_blocks(self):
+        blocks = [
+            {"type": "table", "header": ["항목", "예산"], "rows": [["강사료", "400천원"], ["재료비", "800천원"]]},
+        ]
+        notes = converter.lint_money_notation(blocks)
+        cheonwon_notes = [n for n in notes if "천원" in n]
+        self.assertEqual(len(cheonwon_notes), 1, notes)
+
+
 if __name__ == "__main__":
     unittest.main()

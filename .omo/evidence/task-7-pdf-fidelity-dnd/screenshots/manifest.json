@@ -1,0 +1,191 @@
+﻿[
+    {
+        "state":  "default",
+        "semantic":  "info-blue",
+        "label":  "default",
+        "width":  760,
+        "height":  620,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\default-760x620.png",
+        "bytes":  26869
+    },
+    {
+        "state":  "valid-drop",
+        "semantic":  "drop-valid-blue",
+        "label":  "valid-drop",
+        "width":  760,
+        "height":  620,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\valid-drop-760x620.png",
+        "bytes":  28829
+    },
+    {
+        "state":  "invalid-drop",
+        "semantic":  "drop-rejected-red",
+        "label":  "invalid-drop",
+        "width":  760,
+        "height":  620,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\invalid-drop-760x620.png",
+        "bytes":  27054
+    },
+    {
+        "state":  "busy",
+        "semantic":  "info-blue",
+        "label":  "busy",
+        "width":  760,
+        "height":  620,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\busy-760x620.png",
+        "bytes":  27822
+    },
+    {
+        "state":  "success",
+        "semantic":  "success-green",
+        "label":  "success",
+        "width":  760,
+        "height":  620,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\success-760x620.png",
+        "bytes":  27689
+    },
+    {
+        "state":  "warning",
+        "semantic":  "warning-yellow",
+        "label":  "warning",
+        "width":  760,
+        "height":  620,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\warning-760x620.png",
+        "bytes":  27822
+    },
+    {
+        "state":  "error",
+        "semantic":  "error-red",
+        "label":  "error",
+        "width":  760,
+        "height":  620,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\error-760x620.png",
+        "bytes":  27714
+    },
+    {
+        "state":  "default",
+        "semantic":  "info-blue",
+        "label":  "default",
+        "width":  800,
+        "height":  680,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\default-800x680.png",
+        "bytes":  27955
+    },
+    {
+        "state":  "valid-drop",
+        "semantic":  "drop-valid-blue",
+        "label":  "valid-drop",
+        "width":  800,
+        "height":  680,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\valid-drop-800x680.png",
+        "bytes":  29952
+    },
+    {
+        "state":  "invalid-drop",
+        "semantic":  "drop-rejected-red",
+        "label":  "invalid-drop",
+        "width":  800,
+        "height":  680,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\invalid-drop-800x680.png",
+        "bytes":  28159
+    },
+    {
+        "state":  "busy",
+        "semantic":  "info-blue",
+        "label":  "busy",
+        "width":  800,
+        "height":  680,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\busy-800x680.png",
+        "bytes":  28419
+    },
+    {
+        "state":  "success",
+        "semantic":  "success-green",
+        "label":  "success",
+        "width":  800,
+        "height":  680,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\success-800x680.png",
+        "bytes":  28471
+    },
+    {
+        "state":  "warning",
+        "semantic":  "warning-yellow",
+        "label":  "warning",
+        "width":  800,
+        "height":  680,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\warning-800x680.png",
+        "bytes":  28970
+    },
+    {
+        "state":  "error",
+        "semantic":  "error-red",
+        "label":  "error",
+        "width":  800,
+        "height":  680,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\error-800x680.png",
+        "bytes":  28857
+    },
+    {
+        "state":  "default",
+        "semantic":  "info-blue",
+        "label":  "default",
+        "width":  1200,
+        "height":  900,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\default-1200x900.png",
+        "bytes":  35540
+    },
+    {
+        "state":  "valid-drop",
+        "semantic":  "drop-valid-blue",
+        "label":  "valid-drop",
+        "width":  1200,
+        "height":  900,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\valid-drop-1200x900.png",
+        "bytes":  39436
+    },
+    {
+        "state":  "invalid-drop",
+        "semantic":  "drop-rejected-red",
+        "label":  "invalid-drop",
+        "width":  1200,
+        "height":  900,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\invalid-drop-1200x900.png",
+        "bytes":  36271
+    },
+    {
+        "state":  "busy",
+        "semantic":  "info-blue",
+        "label":  "busy",
+        "width":  1200,
+        "height":  900,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\busy-1200x900.png",
+        "bytes":  35386
+    },
+    {
+        "state":  "success",
+        "semantic":  "success-green",
+        "label":  "success",
+        "width":  1200,
+        "height":  900,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\success-1200x900.png",
+        "bytes":  36414
+    },
+    {
+        "state":  "warning",
+        "semantic":  "warning-yellow",
+        "label":  "warning",
+        "width":  1200,
+        "height":  900,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\warning-1200x900.png",
+        "bytes":  37103
+    },
+    {
+        "state":  "error",
+        "semantic":  "error-red",
+        "label":  "error",
+        "width":  1200,
+        "height":  900,
+        "path":  "C:\\Users\\홍주형\\.claude\\hwpx-converter-renewal\\.omo\\evidence\\task-7-pdf-fidelity-dnd\\screenshots\\error-1200x900.png",
+        "bytes":  37143
+    }
+]

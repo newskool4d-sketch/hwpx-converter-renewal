@@ -17,6 +17,10 @@ import tempfile
 import shutil
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
+from typing import assert_never
+
+from pdf_layout import PdfMode, PdfPageImageBlock, RenderedPdfLayout, parse_pdf_mode, render_pdf_layout
+from runtime_capabilities import detect_capabilities
 
 from hwpx_layout import (
     OFFICIAL_LIST_MAX_DEPTH,
@@ -1394,10 +1398,21 @@ def extract_pdf_text_fallback(path):
     raise RuntimeError(f'PDF 텍스트 추출 실패: {detail}')
 
 
-def parse_pdf(path, kordoc_home=None):
+def parse_pdf(path, kordoc_home=None, pdf_mode='editable', asset_dir=None):
+    mode = parse_pdf_mode(pdf_mode)
+    match mode:
+        case PdfMode.LAYOUT:
+            if asset_dir is None:
+                raise RuntimeError('PDF layout mode requires a caller-owned asset directory.')
+            return render_pdf_layout(path, asset_dir)
+        case PdfMode.EDITABLE:
+            pass
+        case unreachable:
+            assert_never(unreachable)
+
     try:
         return extract_pdf_blocks_odl(path)
-    except Exception as odl_exc:
+    except RuntimeError as odl_exc:
         _odl_warn = str(odl_exc)
 
     try:
@@ -1593,7 +1608,7 @@ def parse_docx(docx_path):
 
 # ─── 확장자 자동 감지 ──────────────────────────────────────────────────────────
 
-def detect_and_parse(file_path, kordoc_home=None):
+def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None):
     path = as_path(file_path)
     require_file(path)
     _conversion_notes.clear()
@@ -1614,7 +1629,29 @@ def detect_and_parse(file_path, kordoc_home=None):
     if ext == '.xlsx':
         return parse_xlsx(path)
     if ext == '.pdf':
-        return parse_pdf(path, kordoc_home=kordoc_home)
+        capabilities = detect_capabilities()
+        if not capabilities.pdf_enabled:
+            raise RuntimeError(
+                'PDF input is unavailable in this runtime; install a supported PDF stack '
+                'or choose a runtime with layout/text capability.'
+            )
+        if pdf_mode == PdfMode.EDITABLE.value and not capabilities.odl_enabled:
+            if capabilities.java_major is not None and capabilities.java_major < 11:
+                _add_conversion_note(
+                    f'PDF editable fallback: Java {capabilities.java_major} is below 11, '
+                    'so opendataloader-pdf is unavailable; pdfplumber/PyMuPDF/pypdf fallback is used.'
+                )
+            else:
+                _add_conversion_note(
+                    'PDF editable fallback: opendataloader-pdf is unavailable; '
+                    'pdfplumber/PyMuPDF/pypdf fallback is used.'
+                )
+        return parse_pdf(
+            path,
+            kordoc_home=kordoc_home,
+            pdf_mode=pdf_mode,
+            asset_dir=asset_dir,
+        )
     raise ValueError(f'지원하지 않는 형식: {ext}')
 
 
@@ -1709,11 +1746,14 @@ def run_hwp_preflight(visible=False, timeout=45):
 def insert_text(hwp, text):
     hwp.HAction.GetDefault('InsertText', hwp.HParameterSet.HInsertText.HSet)
     hwp.HParameterSet.HInsertText.Text = text
-    hwp.HAction.Execute('InsertText', hwp.HParameterSet.HInsertText.HSet)
+    _require_hwp_success(
+        hwp.HAction.Execute('InsertText', hwp.HParameterSet.HInsertText.HSet),
+        'InsertText',
+    )
 
 
 def break_para(hwp):
-    hwp.HAction.Run('BreakPara')
+    _require_hwp_success(hwp.HAction.Run('BreakPara'), 'BreakPara')
 
 
 def _blank_line(hwp):
@@ -1733,7 +1773,12 @@ def set_char_shape(hwp, height=1300, bold=False, italic=False, font='body'):
     pset.SetItem('Italic', italic)
     pset.SetItem('FaceNameHangul', face_hangul)
     pset.SetItem('FaceNameLatin', face_latin)
-    act.Execute(pset)
+    _require_hwp_success(act.Execute(pset), 'CharShape')
+
+
+def _require_hwp_success(result, operation):
+    if result is False or result == 0:
+        raise RuntimeError(f'HWP COM operation failed: {operation}')
 
 
 def set_para_shape(hwp, align=0, space_before=0, space_after=0, indent_left=0, indent_first=0):
@@ -1741,14 +1786,17 @@ def set_para_shape(hwp, align=0, space_before=0, space_after=0, indent_left=0, i
     pset = act.CreateSet()
     act.GetDefault(pset)
     pset.SetItem('Align', align)
-    # SpaceBefore/SpaceAfter: silently ignored by HWP COM — handled via XML post-processing if needed
-    # LineSpacing: 정본 §7-3 160% — COM 적용이 불확실하여 apply_official_line_spacing(header.xml)로 강제
+    pset.SetItem('LineSpacingType', 0)
+    pset.SetItem('LineSpacing', 160)
+    pset.SetItem('PrevSpacing', space_before)
+    pset.SetItem('NextSpacing', 200 if space_after == 0 else space_after)
+    pset.SetItem('BreakNonLatinWord', 0)
     # LeftMargin works with 0.5× ratio (COM LeftMargin=X → hp:case hc:left=X/2)
     # Pass indent_left×2 so that hp:case stores indent_left exactly.
     # Always set explicitly (even 0) to prevent inheritance from the previous paragraph's LeftMargin.
     pset.SetItem('LeftMargin', indent_left * 2)
     # IndentFirst has no COM equivalent — apply_list_hanging_indents handles hc:intent post-processing
-    act.Execute(pset)
+    _require_hwp_success(act.Execute(pset), 'ParagraphShape')
 
 
 def _rewrite_zip_entry(zip_path, entry_name, data):
@@ -2261,7 +2309,7 @@ def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_s
             pset.SetItem(key, value)
         except Exception:
             pass
-    act.Execute(pset)
+    _require_hwp_success(act.Execute(pset), 'TableCreate')
     width_adjust_failed = False
     moved_right = 0
     try:
@@ -2300,6 +2348,68 @@ def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_s
                 insert_text(hwp, cell_text)
     hwp.HAction.Run('MoveDocEnd')
     break_para(hwp)
+
+
+def configure_pdf_page_setup(hwp, pages):
+    if not pages:
+        raise ValueError('PDF layout requires at least one page')
+    if not hasattr(hwp, 'CreateAction'):
+        return
+    page_width = int(round(min(page.width_points for page in pages) * 100))
+    page_height = int(round(max(page.height_points for page in pages) * 100))
+    action = hwp.CreateAction('PageSetup')
+    parameter_set = action.CreateSet()
+    action.GetDefault(parameter_set)
+    try:
+        page_def = parameter_set.Item('PageDef')
+    except (AttributeError, KeyError):
+        parameter_set.CreateItemSet('PageDef', 'PageDef')
+        page_def = parameter_set.Item('PageDef')
+    parameter_set.SetItem('ApplyTo', 3)
+    page_def.SetItem('PaperWidth', page_width)
+    page_def.SetItem('PaperHeight', page_height)
+    page_def.SetItem('Landscape', int(page_width > page_height))
+    for item_name in ('TopMargin', 'BottomMargin', 'LeftMargin', 'RightMargin', 'HeaderLen', 'FooterLen', 'GutterLen'):
+        page_def.SetItem(item_name, 0)
+    page_def.SetItem('GutterType', 0)
+    _require_hwp_success(action.Execute(parameter_set), 'PageSetup')
+
+
+def insert_pdf_page_image(hwp, page: PdfPageImageBlock):
+    if not page.image_path.is_file():
+        raise FileNotFoundError(f'PDF layout asset missing: {page.image_path}')
+    width_mm = page.width_points * 25.4 / 72
+    height_mm = page.height_points * 25.4 / 72
+    result = hwp.InsertPicture(
+        str(page.image_path),
+        True,
+        1,
+        False,
+        False,
+        0,
+        width_mm,
+        height_mm,
+    )
+    _require_hwp_success(result, f'InsertPicture({page.image_path})')
+
+
+def insert_pdf_page_images(hwp, pages):
+    if pages:
+        first_page = pages[0]
+        first_orientation = first_page.width_points > first_page.height_points
+        for page in pages[1:]:
+            orientation = page.width_points > page.height_points
+            if (
+                abs(page.width_points - first_page.width_points) > 0.01
+                or abs(page.height_points - first_page.height_points) > 0.01
+                or orientation != first_orientation
+            ):
+                raise RuntimeError('PDF layout pages have mixed dimensions or orientations')
+    configure_pdf_page_setup(hwp, pages)
+    for index, page in enumerate(pages):
+        insert_pdf_page_image(hwp, page)
+        if index + 1 < len(pages):
+            _require_hwp_success(hwp.HAction.Run('BreakPage'), 'BreakPage')
 
 
 # ─── 문서 빌드 ─────────────────────────────────────────────────────────────────
@@ -2560,6 +2670,32 @@ def lint_official_style(blocks):
     return notes
 
 
+# 숫자(콤마 허용) + '천원' 축약 — 예: 400천원, 3,400천원 (정본 §1-2 위반)
+_CHEONWON_PATTERN = re.compile(r'\d[\d,]*\s*천\s*원')
+
+
+def lint_money_notation(blocks):
+    """정본 §1-2 금액 표기 — '천원' 축약 경고를 반환한다(비강제, 텍스트 미수정).
+
+    금액은 '천원'으로 줄이지 않고 아라비아 숫자로 적는다(예: 345,000원).
+    예산액은 대부분 표 안에 나오므로 lint_official_style과 달리 표 셀까지 스캔한다.
+    """
+    texts = []
+    for blk in blocks:
+        if blk.get('type') in _STYLE_TEXT_TYPES:
+            if blk.get('text'):
+                texts.append(blk['text'])
+            if blk.get('value'):
+                texts.append(blk['value'])
+        elif blk.get('type') == 'table':
+            for row in ([blk.get('header') or []] + (blk.get('rows') or [])):
+                texts.extend(str(cell) for cell in row if cell)
+    combined = '\n'.join(texts)
+    if _CHEONWON_PATTERN.search(combined):
+        return ["[확인 필요] 금액 표기: '천원' 축약 대신 아라비아 숫자로 (예: 345,000원) (정본 §1-2)"]
+    return []
+
+
 # ─── 변환 실행 ─────────────────────────────────────────────────────────────────
 
 def build_output_path(src_path, output_dir):
@@ -2679,64 +2815,106 @@ def convert_file(
     insert_end_mark=False,
     kordoc_home=None,
     diagnose_stage: DiagnoseStageReporter | None = None,
+    pdf_mode='layout',
 ):
     src = as_path(src_path)
     out = as_path(hwpx_path)
+    selected_pdf_mode = parse_pdf_mode(pdf_mode)
     if diagnose_stage:
         diagnose_stage('parse_source')
-    blocks = detect_and_parse(src, kordoc_home=kordoc_home)
-    notes = pop_conversion_notes()
-    if insert_end_mark:
-        blocks = normalize_official_dates(blocks)
-        blocks = normalize_official_amounts(blocks)
-        notes.extend(lint_official_style(blocks))  # 정본 §1-1 순화 경고(비강제)
-        blocks = append_end_mark_blocks(blocks)
-    table_layouts = [
-        {
-            'header': blk.get('header') or [],
-            'rows': blk.get('rows') or [],
-            'table_role': blk.get('table_role') or '',
-            'column_widths': blk.get('column_widths') or [],
-            'table_source': blk.get('table_source') or '',
-            'worksheet_title': blk.get('worksheet_title') or '',
-            'merged_cells': blk.get('merged_cells') or blk.get('merges') or [],
-        }
-        for blk in blocks
-        if blk.get('type') == 'table'
-    ]
+    is_pdf = src.suffix.lower() == '.pdf'
 
-    if diagnose_stage:
-        diagnose_stage('XHwpDocuments.Add')
-    _com_call(lambda: hwp.XHwpDocuments.Add(isTab=False))
-    time.sleep(0.5)
-    doc = hwp.XHwpDocuments.Item(hwp.XHwpDocuments.Count - 1)
+    def convert_loaded(parsed):
+        rendered_layout = isinstance(parsed, RenderedPdfLayout)
+        notes = pop_conversion_notes()
+        blocks = parsed
+        if not rendered_layout and insert_end_mark:
+            blocks = normalize_official_dates(blocks)
+            blocks = normalize_official_amounts(blocks)
+            notes.extend(lint_official_style(blocks))
+            notes.extend(lint_money_notation(blocks))
+            blocks = append_end_mark_blocks(blocks)
+        table_layouts = [
+            {
+                'header': blk.get('header') or [],
+                'rows': blk.get('rows') or [],
+                'table_role': blk.get('table_role') or '',
+                'column_widths': blk.get('column_widths') or [],
+                'table_source': blk.get('table_source') or '',
+                'worksheet_title': blk.get('worksheet_title') or '',
+                'merged_cells': blk.get('merged_cells') or blk.get('merges') or [],
+            }
+            for blk in blocks
+            if blk.get('type') == 'table'
+        ] if not rendered_layout else []
 
-    try:
         if diagnose_stage:
-            diagnose_stage('build_doc')
-        build_doc(hwp, blocks)
-        if diagnose_stage:
-            diagnose_stage('SaveAs')
-        _com_call(lambda: hwp.SaveAs(str(out), 'HWPX', 'lock:false'))
+            diagnose_stage('XHwpDocuments.Add')
+        _com_call(lambda: hwp.XHwpDocuments.Add(isTab=False))
         time.sleep(0.5)
-    finally:
+        doc = hwp.XHwpDocuments.Item(hwp.XHwpDocuments.Count - 1)
+
+        try:
+            try:
+                if diagnose_stage:
+                    diagnose_stage('build_doc')
+                if rendered_layout:
+                    insert_pdf_page_images(hwp, parsed.pages)
+                else:
+                    build_doc(hwp, blocks)
+            except Exception as exc:
+                if rendered_layout:
+                    raise RuntimeError(f'PDF layout build failed for {src.name}: {exc}') from exc
+                raise
+            try:
+                if diagnose_stage:
+                    diagnose_stage('SaveAs')
+                save_result = _com_call(lambda: hwp.SaveAs(str(out), 'HWPX', 'lock:false'))
+                _require_hwp_success(save_result, 'SaveAs')
+            except Exception as exc:
+                if rendered_layout:
+                    raise RuntimeError(f'PDF layout save failed for {src.name}: {exc}') from exc
+                raise
+            time.sleep(0.5)
+        finally:
+            if diagnose_stage:
+                diagnose_stage('doc.Close')
+            _com_call(lambda: doc.Close(isDirty=False))
+            time.sleep(0.3)
+        if rendered_layout:
+            return {'notes': notes}
         if diagnose_stage:
-            diagnose_stage('doc.Close')
-        _com_call(lambda: doc.Close(isDirty=False))
-        time.sleep(0.3)
-    if diagnose_stage:
-        diagnose_stage('postprocess')
-    apply_official_page_margins(out)  # 여백 먼저 — 표 폭이 본문 폭 기준으로 계산되도록
-    apply_table_layout_profiles(out, table_layouts)
-    apply_list_hanging_indents(out)
-    fix_body_text_prid(out)
-    apply_official_line_spacing(out)  # 정본 §7-3: 줄 간격 160% (header.xml paraPr)
-    apply_official_paragraph_spacing(out)  # 정본 §7-3: 제목 단락 앞/뒤 간격 (header.xml paraPr)
-    if diagnose_stage:
-        diagnose_stage('finalize')
+            diagnose_stage('postprocess')
+        apply_official_page_margins(out)
+        apply_table_layout_profiles(out, table_layouts)
+        apply_list_hanging_indents(out)
+        fix_body_text_prid(out)
+        apply_official_line_spacing(out)
+        apply_official_paragraph_spacing(out)
+        if diagnose_stage:
+            diagnose_stage('finalize')
+        return {'notes': notes}
+
+    if is_pdf and selected_pdf_mode is PdfMode.LAYOUT:
+        temp_parent = str(out.parent) if out.parent.is_dir() else None
+        with tempfile.TemporaryDirectory(prefix='anyway-to-hwpx-pdf-', dir=temp_parent) as temp_dir:
+            parsed = detect_and_parse(
+                src,
+                kordoc_home=kordoc_home,
+                pdf_mode=selected_pdf_mode.value,
+                asset_dir=Path(temp_dir),
+            )
+            result = convert_loaded(parsed)
+    else:
+        parsed = detect_and_parse(
+            src,
+            kordoc_home=kordoc_home,
+            pdf_mode=selected_pdf_mode.value,
+        )
+        result = convert_loaded(parsed)
     ext = src.suffix.upper().lstrip('.')
     print(f'[완료] {ext} → {out.name}')
-    return {'notes': notes}
+    return result
 
 
 def main(argv=None):
@@ -2756,6 +2934,10 @@ def main(argv=None):
     parser.add_argument('--preflight', action='store_true', help='HWP COM 실행 가능 여부만 점검하고 종료')
     parser.add_argument('--startup-timeout', type=int, default=45, help='HWP COM 시작 제한 시간(초)')
     parser.add_argument('--diagnose-stages', action='store_true', help='실제 변환 hang 진단용 단계 로그 출력')
+    parser.add_argument(
+        '--pdf-mode', choices=['layout', 'editable'], default='layout',
+        help='PDF 변환 모드: 페이지 이미지 보존 또는 편집 가능한 텍스트 (default: layout)',
+    )
     parser.add_argument('--kordoc-home', default=None, help='스캔 PDF OCR용 kordoc-ai 경로 (또는 KORDOC_HOME 환경변수)')
     parser.add_argument('--_preflight-worker', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--_preflight-visible', action='store_true', help=argparse.SUPPRESS)
@@ -2818,6 +3000,7 @@ def main(argv=None):
                     insert_end_mark=args.insert_end_mark,
                     kordoc_home=args.kordoc_home,
                     diagnose_stage=diagnose_stage,
+                    pdf_mode=args.pdf_mode,
                 )
                 for note in (result or {}).get('notes', []):
                     print(f'  {note}', file=sys.stderr)

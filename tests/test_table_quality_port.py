@@ -197,24 +197,38 @@ class TableHwpxPostProcessTests(unittest.TestCase):
                 section_root = ET.fromstring(zf.read("Contents/section0.xml"))
 
         border_fills = header_root.find(".//hh:borderFills", NS)
-        header_brush = header_root.find('.//hh:borderFill[@id="3"]/hc:fillBrush/hc:winBrush', NS)
         first_cell = section_root.find(".//hp:tc", NS)
         last_cell = section_root.findall(".//hp:tc", NS)[-1]
-        if border_fills is None or header_brush is None or first_cell is None:
+        if border_fills is None or first_cell is None:
             self.fail("expected table border fills and first cell")
         span = first_cell.find("hp:cellSpan", NS)
         margin = first_cell.find("hp:cellMargin", NS)
         if span is None or margin is None:
             self.fail("expected first cell span and margin")
 
-        self.assertEqual(border_fills.get("itemCnt"), "3")
+        # 정본 §8-6: 헤더 좌상단 셀 — 외곽 0.4mm, 하단 이중선, 음영 #C8C8C8
+        first_fill = header_root.find(f'.//hh:borderFill[@id="{first_cell.get("borderFillIDRef")}"]', NS)
+        last_fill = header_root.find(f'.//hh:borderFill[@id="{last_cell.get("borderFillIDRef")}"]', NS)
+        if first_fill is None or last_fill is None:
+            self.fail("expected resolved border fills for first/last cells")
+        header_brush = first_fill.find("hc:fillBrush/hc:winBrush", NS)
+        if header_brush is None:
+            self.fail("expected header cell fill brush")
         self.assertEqual(header_brush.get("faceColor"), "#C8C8C8")
         self.assertEqual(first_cell.get("header"), "1")
-        self.assertEqual(first_cell.get("borderFillIDRef"), "3")
-        self.assertEqual(last_cell.get("borderFillIDRef"), "2")
+        left = first_fill.find("hh:leftBorder", NS)
+        bottom = first_fill.find("hh:bottomBorder", NS)
+        self.assertEqual((left.get("type"), left.get("width")), ("SOLID", "0.4 mm"))
+        self.assertEqual((bottom.get("type"), bottom.get("width")), ("DOUBLE_SLIM", "0.5 mm"))
+        # 본문 우하단 셀 — 우측·하단 외곽 0.4mm, 음영 없음
+        right = last_fill.find("hh:rightBorder", NS)
+        last_bottom = last_fill.find("hh:bottomBorder", NS)
+        self.assertEqual((right.get("type"), right.get("width")), ("SOLID", "0.4 mm"))
+        self.assertEqual((last_bottom.get("type"), last_bottom.get("width")), ("SOLID", "0.4 mm"))
+        self.assertIsNone(last_fill.find("hc:fillBrush/hc:winBrush", NS))
         self.assertEqual(span.get("colSpan"), "2")
         self.assertEqual(span.get("rowSpan"), "1")
-        self.assertEqual(margin.attrib, {"left": "170", "right": "170", "top": "120", "bottom": "120"})
+        self.assertEqual(margin.attrib, {"left": "510", "right": "510", "top": "120", "bottom": "120"})
 
 
 if __name__ == "__main__":

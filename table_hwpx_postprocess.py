@@ -17,8 +17,10 @@ from table_model import TableBlock
 from table_model import TableLayout
 from table_model import table_layout_from_block
 from table_model import table_layout_for
+from table_hwpx_styles import CellBorderSpec
 from table_hwpx_styles import HP_NS
-from table_hwpx_styles import ensure_table_border_fills
+from table_hwpx_styles import ensure_cell_border_fill
+from table_hwpx_styles import positional_border_spec
 from table_hwpx_styles import register_hwpx_namespaces
 
 
@@ -252,11 +254,12 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
             row_heights = calc_row_heights(layout.header, layout.rows, widths)
             if sz is not None:
                 changed = _set_attrs(sz, {"width": sum(widths), "height": sum(row_heights)}) or changed
-            border_refs = ensure_table_border_fills(header_root, layout.style) if header_root is not None else None
-            header_changed = header_changed or bool(border_refs and border_refs.changed)
-            if border_refs is not None:
-                tbl.set("borderFillIDRef", border_refs.body_id)
+            body_ref = ensure_cell_border_fill(header_root, CellBorderSpec()) if header_root is not None else None
+            header_changed = header_changed or bool(body_ref and body_ref.changed)
+            if body_ref is not None:
+                tbl.set("borderFillIDRef", body_ref.border_id)
                 changed = True
+            row_count = _int_attr(tbl, "rowCnt", 0) or len(row_heights)
             spans = _span_by_addr(layout)
             spans, dropped_spans = _filter_spans_to_grid(spans, len(widths), len(row_heights))
             if dropped_spans:
@@ -287,10 +290,21 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
                     changed = _set_attrs(cell_sz, {"height": sum(row_heights[row : min(len(row_heights), row + row_span)])}) or changed
                 if row == 0:
                     tc.set("header", "1")
-                    if border_refs is not None:
-                        tc.set("borderFillIDRef", border_refs.header_id)
-                elif border_refs is not None:
-                    tc.set("borderFillIDRef", border_refs.body_id)
+                if header_root is not None:
+                    spec = positional_border_spec(
+                        row,
+                        col,
+                        row_span,
+                        col_span,
+                        row_count,
+                        len(widths),
+                        header_fill_color=layout.style.header_fill_color,
+                    )
+                    cell_ref = ensure_cell_border_fill(header_root, spec)
+                    header_changed = header_changed or cell_ref.changed
+                    if tc.attrib.get("borderFillIDRef") != cell_ref.border_id:
+                        tc.set("borderFillIDRef", cell_ref.border_id)
+                        changed = True
                 tc.set("hasMargin", "1")
                 changed = _ensure_cell_margin(tc, layout) or changed
                 changed = _compact_cell_paragraphs(tc, cell_para_space) or changed

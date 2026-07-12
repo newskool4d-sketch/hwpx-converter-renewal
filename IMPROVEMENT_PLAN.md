@@ -257,3 +257,25 @@ def table_widths_for(header, rows, table_role, col_count, total_width):
 - ✅ **② 로마숫자 실변환 검증(2026-07-03)**: `--doc-type sihaengmun`에서 `1.` 들여쓰기 left=900(depth1)→**620(depth0)**, `가.` 1320→960로 당겨짐을 출력 XML로 확인. 정본 §2-1대로 발화.
 - ✅ **④ 전면 적용(2026-07-03)**: 공유 paraPr을 레벨별 clone하여 제목에만 재배정(본문 0/0 보존). HWP 실변환 검증 — H1 500/250·H2 400/200·H3 300/150이 clone(pp20/21/22)에 적용됨. TDD 중 파일 라운드트립 버그(section0.xml 미기록) 발견·수정. (기존 skip 방식 → clone 방식 재기준화)
 - 공통: 렌더 육안 검수는 Windows+HWP 필요. XML 스키마/값 수준은 `python -m unittest discover -s tests`(153 green)로 검증됨.
+
+---
+
+## 9. Track D kordoc 연계 개선 완료 (2026-07-12, TDD)
+
+kordoc(v4.0.5) 업그레이드 후 참고 사항을 대조해 4개 항목 반영. 전체 **237 passed, 1 skipped**(bs4 미설치). 정본(`HWPX_작성규칙.md`)에 §8-6 신설.
+
+| # | 항목 | 구현 | 정본 | 테스트 |
+| :-- | :-- | :-- | :-- | :-- |
+| ① | 표 테두리 매트릭스 | `positional_border_spec` — 셀 위치(병합 span 범위)별 borderFill 배정. 외곽 SOLID 0.4mm·내부 0.12mm·헤더 하단 DOUBLE_SLIM 0.5mm(본문 1행 상단 미러링). 1행/1열 표는 외곽선 우선 | §8-6(신설) | test_table_border_matrix (9), test_table_quality_port 갱신 |
+| ② | 셀 좌우 안여백 | `TableCellStyle.margin_left/right` 170→510(1.8mm) — kordoc 실측 대조 | §8-6 | test_table_quality_port |
+| ③ | 라운드트립 내용 검증 | `scripts/roundtrip_verify.py` — md→HWPX(COM)→md(kordoc CLI) 후 표 셀·문단 텍스트 보존 대조. COM·CLI 필요로 기본 스위트 제외(scripts/) | — | 음성 대조 자체검증 |
+| ④ | '천원' 축약 린트 | `lint_money_notation` — 숫자+천원 패턴 경고(표 셀까지 스캔, `lint_official_style`과 분리). '수천원' 오탐 가드 | §1-2 | test_official_style_lint (신규 5) |
+
+### HWP 실변환 검수 결과 (2026-07-12)
+- ✅ **① 테두리 실발화**: 4×4 표 출력 XML에서 헤더행(top 0.4mm·bottom 이중선·#C8C8C8) / 본문 1행 top 이중선 미러링 / 중앙 셀 전부 0.12mm / 마지막 행 bottom 0.4mm 확인. 1행 표는 하단이 이중선 아닌 외곽 0.4mm(엣지 케이스).
+- ✅ **③ 라운드트립**: 번들 샘플 토큰 18/18 보존, 음성 대조로 누락 탐지 동작 확인.
+- ✅ **④ 천원 린트**: `--insert-end-mark` 실변환 시 표 셀 "400천원"에 대해 경고 발화(금일·및과 함께).
+
+### 보류 — 서식 프로필 추출·재현 (후속 아이디어)
+- kordoc `extract_profile`(참조 HWPX → 테두리·음영·열폭·셀 글꼴 JSON)의 이식을 검토했으나, **§8-6이 테두리·음영을 전 표 표준 적용**하고 글꼴은 정본 §7-1(맑은고딕)로 이미 고정되어 대부분 subsume됨. 남은 고유 가치는 참조 문서별 **열폭 프로필**뿐이며, 현재 `TABLE_HEADER_WIDTH_PROFILES`(헤더 키워드) + 내용 길이 자동 산정으로 충분.
+- 착수 시 후보: (a) `scripts/extract_width_profile.py`로 참조 HWPX에서 헤더→열폭 비율 JSON 추출(개발 도구, 핫패스 무변경), (b) `TABLE_HEADER_WIDTH_PROFILES` 외부 JSON 병합(런타임 사용자 프로필). **2026-07-12 사용자 결정: 이번 회차 보류.**

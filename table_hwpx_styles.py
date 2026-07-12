@@ -4,8 +4,6 @@ from dataclasses import dataclass
 from typing import Final
 import xml.etree.ElementTree as ET
 
-from table_model import TableCellStyle
-
 
 HH_NS: Final = "http://www.hancom.co.kr/hwpml/2011/head"
 HC_NS: Final = "http://www.hancom.co.kr/hwpml/2011/core"
@@ -17,6 +15,12 @@ DIAGONAL_BORDER_WIDTH: Final = "0.1 mm"
 TABLE_BORDER_COLOR: Final = "#000000"
 BORDER_NAMES: Final = ("leftBorder", "rightBorder", "topBorder", "bottomBorder")
 
+# 정본 §8-6: 외곽 SOLID 0.4mm / 내부 SOLID 0.12mm / 헤더 하단 DOUBLE_SLIM 0.5mm
+BorderSide = tuple[str, str]
+INNER_SIDE: Final[BorderSide] = ("SOLID", TABLE_BORDER_WIDTH)
+OUTER_SIDE: Final[BorderSide] = ("SOLID", "0.4 mm")
+HEADER_SEP_SIDE: Final[BorderSide] = ("DOUBLE_SLIM", "0.5 mm")
+
 
 @dataclass(frozen=True, slots=True)
 class BorderFillResult:
@@ -25,10 +29,12 @@ class BorderFillResult:
 
 
 @dataclass(frozen=True, slots=True)
-class TableBorderFillRefs:
-    body_id: str
-    header_id: str
-    changed: bool
+class CellBorderSpec:
+    left: BorderSide = INNER_SIDE
+    right: BorderSide = INNER_SIDE
+    top: BorderSide = INNER_SIDE
+    bottom: BorderSide = INNER_SIDE
+    fill_color: str | None = None
 
 
 def register_hwpx_namespaces() -> None:
@@ -40,6 +46,42 @@ def register_hwpx_namespaces() -> None:
 
 def _rgb_color(value: int) -> str:
     return f"#{value & 0xFFFFFF:06X}"
+
+
+def positional_border_spec(
+    row: int,
+    col: int,
+    row_span: int,
+    col_span: int,
+    row_count: int,
+    col_count: int,
+    header_fill_color: int | None = None,
+) -> CellBorderSpec:
+    """셀 위치(병합 span 범위 기준)에 따른 정본 §8-6 테두리 스펙.
+
+    외곽 접촉이 헤더 경계 이중선보다 우선한다 — 1행 표의 하단은 외곽선.
+    이중선은 헤더 하단과 본문 1행 상단 양쪽에 선언해 렌더링을 일관시킨다.
+    """
+    touches_top = row == 0
+    touches_bottom = row + row_span >= row_count
+    top = OUTER_SIDE if touches_top else (HEADER_SEP_SIDE if row == 1 else INNER_SIDE)
+    bottom = OUTER_SIDE if touches_bottom else (HEADER_SEP_SIDE if row + row_span == 1 else INNER_SIDE)
+    return CellBorderSpec(
+        left=OUTER_SIDE if col == 0 else INNER_SIDE,
+        right=OUTER_SIDE if col + col_span >= col_count else INNER_SIDE,
+        top=top,
+        bottom=bottom,
+        fill_color=_rgb_color(header_fill_color) if row == 0 and header_fill_color is not None else None,
+    )
+
+
+def _spec_sides(spec: CellBorderSpec) -> dict[str, BorderSide]:
+    return {
+        "leftBorder": spec.left,
+        "rightBorder": spec.right,
+        "topBorder": spec.top,
+        "bottomBorder": spec.bottom,
+    }
 
 
 def _border_fill_count(border_fills: ET.Element) -> int:
@@ -63,64 +105,62 @@ def _set_border_fill_count(border_fills: ET.Element) -> None:
     border_fills.set("itemCnt", str(_border_fill_count(border_fills)))
 
 
-def _border_fill_matches(border_fill: ET.Element, fill_color: str | None) -> bool:
-    for border_name in BORDER_NAMES:
+def _border_fill_matches(border_fill: ET.Element, spec: CellBorderSpec) -> bool:
+    for border_name, (line_type, line_width) in _spec_sides(spec).items():
         border = border_fill.find(f"hh:{border_name}", XML_NS)
         if border is None:
             return False
-        if border.attrib.get("type") != "SOLID":
+        if border.attrib.get("type") != line_type:
             return False
-        if border.attrib.get("width") != TABLE_BORDER_WIDTH:
+        if border.attrib.get("width") != line_width:
             return False
         if border.attrib.get("color") != TABLE_BORDER_COLOR:
             return False
     win_brush = border_fill.find("hc:fillBrush/hc:winBrush", XML_NS)
-    if fill_color is None:
+    if spec.fill_color is None:
         return win_brush is None
-    return win_brush is not None and win_brush.attrib.get("faceColor") == fill_color
+    return win_brush is not None and win_brush.attrib.get("faceColor") == spec.fill_color
 
 
-def _make_border_fill(fill_color: str | None) -> ET.Element:
+def _make_border_fill(spec: CellBorderSpec) -> ET.Element:
     border_fill = ET.Element(
         f"{{{HH_NS}}}borderFill",
         {"threeD": "0", "shadow": "0", "centerLine": "NONE", "breakCellSeparateLine": "0"},
     )
     ET.SubElement(border_fill, f"{{{HH_NS}}}slash", {"type": "NONE", "Crooked": "0", "isCounter": "0"})
     ET.SubElement(border_fill, f"{{{HH_NS}}}backSlash", {"type": "NONE", "Crooked": "0", "isCounter": "0"})
-    for border_name in BORDER_NAMES:
+    for border_name, (line_type, line_width) in _spec_sides(spec).items():
         ET.SubElement(
             border_fill,
             f"{{{HH_NS}}}{border_name}",
-            {"type": "SOLID", "width": TABLE_BORDER_WIDTH, "color": TABLE_BORDER_COLOR},
+            {"type": line_type, "width": line_width, "color": TABLE_BORDER_COLOR},
         )
     ET.SubElement(
         border_fill,
         f"{{{HH_NS}}}diagonal",
         {"type": "SOLID", "width": DIAGONAL_BORDER_WIDTH, "color": TABLE_BORDER_COLOR},
     )
-    if fill_color is not None:
+    if spec.fill_color is not None:
         fill_brush = ET.SubElement(border_fill, f"{{{HC_NS}}}fillBrush")
-        ET.SubElement(fill_brush, f"{{{HC_NS}}}winBrush", {"faceColor": fill_color, "hatchColor": "#999999", "alpha": "0"})
+        ET.SubElement(fill_brush, f"{{{HC_NS}}}winBrush", {"faceColor": spec.fill_color, "hatchColor": "#999999", "alpha": "0"})
     return border_fill
 
 
-def _ensure_border_fill(border_fills: ET.Element, fill_color: str | None) -> BorderFillResult:
+def _ensure_border_fill(border_fills: ET.Element, spec: CellBorderSpec) -> BorderFillResult:
     for border_fill in border_fills.findall("hh:borderFill", XML_NS):
         border_id = border_fill.attrib.get("id")
-        if border_id is not None and _border_fill_matches(border_fill, fill_color):
+        if border_id is not None and _border_fill_matches(border_fill, spec):
             return BorderFillResult(border_id=border_id, changed=False)
     border_id = _next_border_fill_id(border_fills)
-    border_fill = _make_border_fill(fill_color)
+    border_fill = _make_border_fill(spec)
     border_fill.set("id", border_id)
     border_fills.append(border_fill)
     _set_border_fill_count(border_fills)
     return BorderFillResult(border_id=border_id, changed=True)
 
 
-def ensure_table_border_fills(header_root: ET.Element, style: TableCellStyle) -> TableBorderFillRefs:
+def ensure_cell_border_fill(header_root: ET.Element, spec: CellBorderSpec) -> BorderFillResult:
     border_fills = header_root.find(".//hh:borderFills", XML_NS)
     if border_fills is None:
         raise ValueError("header.xml borderFills not found")
-    body = _ensure_border_fill(border_fills, None)
-    header = _ensure_border_fill(border_fills, _rgb_color(style.header_fill_color))
-    return TableBorderFillRefs(body_id=body.border_id, header_id=header.border_id, changed=body.changed or header.changed)
+    return _ensure_border_fill(border_fills, spec)

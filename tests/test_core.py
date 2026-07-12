@@ -730,6 +730,19 @@ class EndMarkBlockTests(unittest.TestCase):
         result = converter.append_end_mark_blocks(blocks)
         self.assertEqual(len(result), 1)
 
+    def test_table_last_row_ending_with_end_mark_not_duplicated(self):
+        # 표 마지막 행이 이미 '끝.'으로 마감된 경우 별도 '끝.' 단락을 덧붙이지 않음
+        blocks = [{'type': 'table', 'header': ['구분'], 'rows': [['내용'], ['합계  끝.']]}]
+        result = converter.append_end_mark_blocks(blocks)
+        self.assertEqual(len(result), 1)
+
+    def test_bare_end_mark_without_period_not_duplicated(self):
+        # 마침표 없는 '끝'도 마감으로 인정 (_ends_with_end_mark 계약)
+        blocks = [{'type': 'p', 'text': '보고합니다  끝'}]
+        result = converter.append_end_mark_blocks(blocks)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]['text'], '보고합니다  끝')
+
     def test_attachment_gets_end_mark_on_same_line(self):
         blocks = [
             {'type': 'attachment', 'text': '붙임  1. 계획서 1부.'},

@@ -1,6 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
+
 pdf_stack = os.environ.get('HWPX_GUI_PDF_STACK', 'full').lower()
 if pdf_stack not in {'full', 'text', 'none'}:
     raise SystemExit('HWPX_GUI_PDF_STACK must be one of: full, text, none')
@@ -47,12 +53,20 @@ def _find_odl_jar():
 _odl_jar = _find_odl_jar() if pdf_stack == 'full' else None
 _odl_datas = [(_odl_jar, "opendataloader_pdf/jar")] if _odl_jar else []
 
+# tkinterdnd2 ships the native tkdnd DLL and Tcl support files inside its
+# package.  Collect all three surfaces explicitly so drag-and-drop survives
+# one-file/one-dir builds.  Pillow is deliberately excluded below; PyMuPDF's
+# Pixmap.tobytes("png") path does not need PIL.
+_tkdnd_datas = collect_data_files("tkinterdnd2")
+_tkdnd_binaries = collect_dynamic_libs("tkinterdnd2")
+_tkdnd_hiddenimports = collect_submodules("tkinterdnd2")
+
 a = Analysis(
     ['anyway_to_hwpx_gui.py'],
     pathex=[],
-    binaries=[],
-    datas=_odl_datas,
-    hiddenimports=pdf_text_imports + odl_imports,
+    binaries=_tkdnd_binaries,
+    datas=_odl_datas + _tkdnd_datas,
+    hiddenimports=pdf_text_imports + odl_imports + _tkdnd_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
