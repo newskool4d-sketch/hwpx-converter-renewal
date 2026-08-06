@@ -22,6 +22,7 @@ from table_hwpx_styles import HP_NS
 from table_hwpx_styles import ensure_cell_border_fill
 from table_hwpx_styles import positional_border_spec
 from table_hwpx_styles import register_hwpx_namespaces
+from table_hwpx_styles import serialize_hwpml_part
 
 
 NS = {"hp": HP_NS}
@@ -311,8 +312,8 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
             changed = _remove_covered_cells(tbl, spans) or changed
             changed = _compact_paragraph_after_table(root, tbl, after_para_space) or changed
         if header_root is not None and header_changed:
-            _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(header_root, encoding="utf-8", xml_declaration=True))
+            _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(header_root))
         if changed:
-            _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(root, encoding="utf-8", xml_declaration=True))
+            _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(root))
     except (ET.ParseError, OSError, ValueError, zipfile.BadZipFile) as exc:
         print(f"  [경고] 표 후처리 실패: {exc}", file=sys.stderr)

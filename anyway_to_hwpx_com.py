@@ -42,6 +42,7 @@ from hwpx_layout import (
 )
 from table_grid import SourceCell, block_rows_from_grid, expand_spanned_rows
 from table_hwpx_postprocess import apply_table_layout_profiles as _apply_table_layout_profiles_new
+from table_hwpx_styles import serialize_hwpml_part
 from table_model import table_layout_for
 
 
@@ -1946,7 +1947,7 @@ def apply_list_hanging_indents(hwpx_path):
                             changed = True
         if not changed:
             return
-        _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
+        _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(root))
     except Exception as e:
         print(f'[경고] 목록 내어쓰기 후처리 실패: {e}', file=sys.stderr)
 
@@ -2025,10 +2026,7 @@ def fix_body_text_prid(hwpx_path):
             changed = True
 
         if changed:
-            _rewrite_zip_entry(
-                hwpx_path, section_name,
-                ET.tostring(sroot, encoding='utf-8', xml_declaration=True),
-            )
+            _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(sroot))
     except Exception as e:
         print(f'[경고] 본문 단락 paraPr 보정 실패: {e}', file=sys.stderr)
 
@@ -2078,7 +2076,7 @@ def apply_official_line_spacing(hwpx_path):
             if _set_attrs(line_spacing, {'type': 'PERCENT', 'value': str(_OFFICIAL_LINE_SPACING), 'unit': 'HWPUNIT'}):
                 changed = True
         if changed:
-            _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
+            _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(root))
     except Exception as e:
         print(f'[경고] 줄 간격 후처리 실패: {e}', file=sys.stderr)
 
@@ -2218,10 +2216,10 @@ def apply_official_paragraph_spacing(hwpx_path):
         if cloned:
             print(f'  [참고] 제목 단락 간격: 공유 paraPr {cloned}건 분리 적용 (§7-3)', file=sys.stderr)
         if changed:
-            _rewrite_zip_entry(hwpx_path, header_name, ET.tostring(header_root, encoding='utf-8', xml_declaration=True))
+            _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(header_root))
         if cloned:
             # clone 재배정은 section0.xml의 paraPrIDRef를 바꾸므로 반드시 함께 기록
-            _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(section_root, encoding='utf-8', xml_declaration=True))
+            _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(section_root))
     except Exception as e:
         print(f'[경고] 단락 간격 후처리 실패: {e}', file=sys.stderr)
 
@@ -2247,7 +2245,7 @@ def apply_official_page_margins(hwpx_path):
                     margin.set(key, str(value))
                     changed = True
         if changed:
-            _rewrite_zip_entry(hwpx_path, section_name, ET.tostring(root, encoding='utf-8', xml_declaration=True))
+            _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(root))
     except Exception as e:
         print(f'[경고] 페이지 여백 후처리 실패: {e}', file=sys.stderr)
 

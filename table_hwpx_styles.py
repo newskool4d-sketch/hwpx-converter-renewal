@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Final
+import re
 import xml.etree.ElementTree as ET
 
 
@@ -10,6 +11,29 @@ HC_NS: Final = "http://www.hancom.co.kr/hwpml/2011/core"
 HP_NS: Final = "http://www.hancom.co.kr/hwpml/2011/paragraph"
 HS_NS: Final = "http://www.hancom.co.kr/hwpml/2011/section"
 XML_NS: Final = {"hh": HH_NS, "hc": HC_NS}
+
+# 정품 한컴이 header.xml·section0.xml 루트에 항상 선언하는 15종.
+# python-hwpx 6.0.2 의 HWPML_COMPAT_ROOT_NAMESPACES 와 동일하며,
+# 하나라도 빠지면 편집기 안전성 게이트가 호환성 error 로 검출한다.
+HWPML_ROOT_NAMESPACES: Final[dict[str, str]] = {
+    "ha": "http://www.hancom.co.kr/hwpml/2011/app",
+    "hp": HP_NS,
+    "hp10": "http://www.hancom.co.kr/hwpml/2016/paragraph",
+    "hs": HS_NS,
+    "hc": HC_NS,
+    "hh": HH_NS,
+    "hhs": "http://www.hancom.co.kr/hwpml/2011/history",
+    "hm": "http://www.hancom.co.kr/hwpml/2011/master-page",
+    "hpf": "http://www.hancom.co.kr/schema/2011/hpf",
+    "dc": "http://purl.org/dc/elements/1.1/",
+    "opf": "http://www.idpf.org/2007/opf/",
+    "ooxmlchart": "http://www.hancom.co.kr/hwpml/2016/ooxmlchart",
+    "hwpunitchar": "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar",
+    "epub": "http://www.idpf.org/2007/ops",
+    "config": "urn:oasis:names:tc:opendocument:xmlns:config:1.0",
+}
+_XML_DECLARATION: Final = '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>\n'
+_ROOT_TAG_NAME_RE: Final = re.compile(r"<[^\s/>]+")
 TABLE_BORDER_WIDTH: Final = "0.12 mm"
 DIAGONAL_BORDER_WIDTH: Final = "0.1 mm"
 TABLE_BORDER_COLOR: Final = "#000000"
@@ -42,6 +66,27 @@ def register_hwpx_namespaces() -> None:
     ET.register_namespace("hh", HH_NS)
     ET.register_namespace("hc", HC_NS)
     ET.register_namespace("hs", HS_NS)
+
+
+def serialize_hwpml_part(root: ET.Element) -> bytes:
+    """header.xml·section0.xml 을 정품 한컴과 동일한 선언부로 직렬화한다.
+
+    ET 는 실제 사용된 프리픽스만 방출하고 XML 선언에 standalone 을 넣지 않으므로,
+    후처리로 파트를 다시 쓰면 COM 이 저장한 정품 선언부가 소실된다.
+    이미 선언된 프리픽스는 건드리지 않는다 — 중복 선언은 XML 파싱 자체를 깨뜨린다.
+    미등록 네임스페이스에 ET 가 붙이는 ns0: 자동 프리픽스도 함께 차단한다.
+    """
+    for prefix, uri in HWPML_ROOT_NAMESPACES.items():
+        ET.register_namespace(prefix, uri)
+    body = ET.tostring(root, encoding="unicode")
+    open_tag = body[: body.index(">")]
+    insert_at = _ROOT_TAG_NAME_RE.match(body).end()
+    missing = "".join(
+        f' xmlns:{prefix}="{uri}"'
+        for prefix, uri in HWPML_ROOT_NAMESPACES.items()
+        if f'xmlns:{prefix}="' not in open_tag
+    )
+    return (_XML_DECLARATION + body[:insert_at] + missing + body[insert_at:]).encode("utf-8")
 
 
 def _rgb_color(value: int) -> str:
