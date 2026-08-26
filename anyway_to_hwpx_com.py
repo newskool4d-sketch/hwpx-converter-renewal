@@ -2351,26 +2351,26 @@ def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_s
 def configure_pdf_page_setup(hwp, pages):
     if not pages:
         raise ValueError('PDF layout requires at least one page')
-    if not hasattr(hwp, 'CreateAction'):
+    if not hasattr(hwp, 'HParameterSet'):
         return
+    # hwp.CreateAction('PageSetup') + action.Execute() reports success but
+    # silently discards margin changes in real HWP COM: re-reading the
+    # parameter set afterward still shows the untouched document defaults
+    # (e.g. LeftMargin stays 8504). hwp.HParameterSet.HSecDef combined with
+    # hwp.HAction.GetDefault/Execute('PageSetup', ...) is the pattern that
+    # actually persists margin changes.
     page_width = int(round(min(page.width_points for page in pages) * 100))
     page_height = int(round(max(page.height_points for page in pages) * 100))
-    action = hwp.CreateAction('PageSetup')
-    parameter_set = action.CreateSet()
-    action.GetDefault(parameter_set)
-    try:
-        page_def = parameter_set.Item('PageDef')
-    except (AttributeError, KeyError):
-        parameter_set.CreateItemSet('PageDef', 'PageDef')
-        page_def = parameter_set.Item('PageDef')
-    parameter_set.SetItem('ApplyTo', 3)
-    page_def.SetItem('PaperWidth', page_width)
-    page_def.SetItem('PaperHeight', page_height)
-    page_def.SetItem('Landscape', int(page_width > page_height))
+    sec_def = hwp.HParameterSet.HSecDef
+    hwp.HAction.GetDefault('PageSetup', sec_def.HSet)
+    page_def = sec_def.PageDef
+    page_def.PaperWidth = page_width
+    page_def.PaperHeight = page_height
+    page_def.Landscape = int(page_width > page_height)
     for item_name in ('TopMargin', 'BottomMargin', 'LeftMargin', 'RightMargin', 'HeaderLen', 'FooterLen', 'GutterLen'):
-        page_def.SetItem(item_name, 0)
-    page_def.SetItem('GutterType', 0)
-    _require_hwp_success(action.Execute(parameter_set), 'PageSetup')
+        setattr(page_def, item_name, 0)
+    page_def.GutterType = 0
+    _require_hwp_success(hwp.HAction.Execute('PageSetup', sec_def.HSet), 'PageSetup')
 
 
 def insert_pdf_page_image(hwp, page: PdfPageImageBlock):

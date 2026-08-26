@@ -68,11 +68,34 @@ class _FakeHAction:
         return self.run_result
 
 
+class _FakePageDef:
+    def __init__(self):
+        self.PaperWidth = None
+        self.PaperHeight = None
+        self.Landscape = None
+        self.GutterType = None
+        self.TopMargin = None
+        self.BottomMargin = None
+        self.LeftMargin = None
+        self.RightMargin = None
+        self.HeaderLen = None
+        self.FooterLen = None
+        self.GutterLen = None
+
+
+class _FakeSecDef:
+    def __init__(self):
+        self.PageDef = _FakePageDef()
+        self.HSet = object()
+
+
 class _FakeHwp:
     def __init__(self, *, execute_result=True, insert_result=True, run_result=True):
         self.HAction = _FakeHAction(execute_result=execute_result, run_result=run_result)
         insert_text = type("InsertTextParameters", (), {"HSet": _FakeParameterSet(), "Text": ""})()
-        self.HParameterSet = type("ParameterSets", (), {"HInsertText": insert_text})()
+        self.HParameterSet = type(
+            "ParameterSets", (), {"HInsertText": insert_text, "HSecDef": _FakeSecDef()}
+        )()
         self.insert_result = insert_result
         self.insert_calls = []
 
@@ -91,7 +114,13 @@ def _page(root: Path, name: str, width: float, height: float) -> PdfPageImageBlo
 
 
 class PdfHwpImageWriterTests(unittest.TestCase):
-    def test_page_setup_uses_nested_page_def_and_source_geometry(self):
+    def test_page_setup_uses_hparameterset_secdef_and_source_geometry(self):
+        # configure_pdf_page_setup previously drove hwp.CreateAction('PageSetup'),
+        # whose Execute() reports success but silently discards margin changes in
+        # real HWP COM (verified empirically: GetDefault after Execute still
+        # reports the untouched document defaults, e.g. LeftMargin stays 8504).
+        # hwp.HParameterSet.HSecDef + hwp.HAction.GetDefault/Execute('PageSetup', ...)
+        # is the pattern that actually persists margin changes.
         with TemporaryDirectory() as tmp:
             root = Path(tmp)
             pages = (_page(root, "p1.png", 595.0, 842.0), _page(root, "p2.png", 595.0, 842.0))
@@ -99,14 +128,16 @@ class PdfHwpImageWriterTests(unittest.TestCase):
 
             converter.configure_pdf_page_setup(hwp, pages)
 
-        action = next(action for name, kind, action in hwp.HAction.actions if name == "PageSetup" and kind == "CreateAction")
-        page_def = action.set.Item("PageDef")
-        self.assertEqual(page_def.items["PaperWidth"], 59500)
-        self.assertEqual(page_def.items["PaperHeight"], 84200)
-        self.assertEqual(page_def.items["Landscape"], 0)
+        sec_def = hwp.HParameterSet.HSecDef
+        page_def = sec_def.PageDef
+        self.assertEqual(page_def.PaperWidth, 59500)
+        self.assertEqual(page_def.PaperHeight, 84200)
+        self.assertEqual(page_def.Landscape, 0)
+        self.assertEqual(page_def.GutterType, 0)
         for item in ("TopMargin", "BottomMargin", "LeftMargin", "RightMargin", "HeaderLen", "FooterLen", "GutterLen"):
-            self.assertEqual(page_def.items[item], 0)
-        self.assertEqual(action.action_log[-1][1], "Execute")
+            self.assertEqual(getattr(page_def, item), 0)
+        self.assertIn(("PageSetup", "GetDefault", sec_def.HSet), hwp.HAction.actions)
+        self.assertEqual(hwp.HAction.actions[-1], ("PageSetup", "Execute", sec_def.HSet))
 
     def test_page_setup_landscape_uses_width_greater_than_height(self):
         with TemporaryDirectory() as tmp:
@@ -115,11 +146,10 @@ class PdfHwpImageWriterTests(unittest.TestCase):
 
             converter.configure_pdf_page_setup(hwp, pages)
 
-        action = next(action for name, kind, action in hwp.HAction.actions if name == "PageSetup" and kind == "CreateAction")
-        page_def = action.set.Item("PageDef")
-        self.assertEqual(page_def.items["PaperWidth"], 84200)
-        self.assertEqual(page_def.items["PaperHeight"], 59500)
-        self.assertEqual(page_def.items["Landscape"], 1)
+        page_def = hwp.HParameterSet.HSecDef.PageDef
+        self.assertEqual(page_def.PaperWidth, 84200)
+        self.assertEqual(page_def.PaperHeight, 59500)
+        self.assertEqual(page_def.Landscape, 1)
 
     def test_page_setup_false_execute_fails(self):
         with TemporaryDirectory() as tmp:
@@ -131,13 +161,11 @@ class PdfHwpImageWriterTests(unittest.TestCase):
         with TemporaryDirectory() as tmp:
             pages = (_page(Path(tmp), "p1.png", 595.0, 842.0),)
             hwp = _FakeHwp()
-            action = _FakeAction("PageSetup")
 
-            def fail_execute(_parameter_set):
+            def fail_execute(_name, _parameter_set):
                 raise RuntimeError("PageSetup failed")
 
-            action.Execute = fail_execute
-            hwp.CreateAction = lambda _name: action
+            hwp.HAction.Execute = fail_execute
             with self.assertRaises(RuntimeError):
                 converter.configure_pdf_page_setup(hwp, pages)
 

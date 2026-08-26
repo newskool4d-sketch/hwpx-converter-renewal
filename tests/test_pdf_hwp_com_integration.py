@@ -44,8 +44,8 @@ class PdfHwpComIntegrationTests(unittest.TestCase):
             try:
                 converter.convert_file(hwp, source_pdf, hwpx, pdf_mode='layout')
                 self._assert_hwpx_image_contract(hwpx)
-                hwp.Open(str(hwpx))
-                self.assertTrue(hwp.SaveAs(str(roundtrip_pdf), 'PDF'))
+                hwp.Open(str(hwpx), 'HWPX', '')
+                self.assertTrue(hwp.SaveAs(str(roundtrip_pdf), 'PDF', ''))
             finally:
                 hwp.Quit()
             self._assert_roundtrip(source_pdf, roundtrip_pdf)
