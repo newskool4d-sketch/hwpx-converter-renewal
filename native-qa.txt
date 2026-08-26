@@ -1,4 +1,20 @@
-Traceback (most recent call last):
-  File "C:\Users\ȫ����\.claude\hwpx-converter-renewal\tests\gui_state_harness.py", line 7, in <module>
-    from anyway_to_hwpx_gui import ConverterApp
-ModuleNotFoundError: No module named 'anyway_to_hwpx_gui'
+HWPX GUI 상태 하네스 실행 로그 (Track E-4, 2026-08-26 갱신)
+
+이전 내용(참고용, 폐기): `anyway_to_hwpx_gui.py`가 워크트리에 없던 시점의
+`ModuleNotFoundError: No module named 'anyway_to_hwpx_gui'` 트레이스백이었음.
+현재는 GUI 소스가 존재하므로 무효화된 결함이었다.
+
+검증 명령: `python tests/gui_state_harness.py --state <state> --hold-seconds 0.2`
+
+| state        | exit code |
+| :----------- | :-------- |
+| default      | 0 |
+| valid-drop   | 0 |
+| invalid-drop | 0 |
+| busy         | 0 |
+| success      | 0 |
+| warning      | 0 |
+| error        | 0 |
+
+7개 상태 모두 예외 없이 종료(exit 0). 화면 캡처(21개 PNG, 3개 해상도 x 7개 상태)가
+필요하면 `scripts/capture_gui_states.ps1`을 별도 실행한다(PowerShell, 대화형 창 필요).

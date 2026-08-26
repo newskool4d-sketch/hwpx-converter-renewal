@@ -279,3 +279,47 @@ kordoc(v4.0.5) 업그레이드 후 참고 사항을 대조해 4개 항목 반영
 ### 보류 — 서식 프로필 추출·재현 (후속 아이디어)
 - kordoc `extract_profile`(참조 HWPX → 테두리·음영·열폭·셀 글꼴 JSON)의 이식을 검토했으나, **§8-6이 테두리·음영을 전 표 표준 적용**하고 글꼴은 정본 §7-1(맑은고딕)로 이미 고정되어 대부분 subsume됨. 남은 고유 가치는 참조 문서별 **열폭 프로필**뿐이며, 현재 `TABLE_HEADER_WIDTH_PROFILES`(헤더 키워드) + 내용 길이 자동 산정으로 충분.
 - 착수 시 후보: (a) `scripts/extract_width_profile.py`로 참조 HWPX에서 헤더→열폭 비율 JSON 추출(개발 도구, 핫패스 무변경), (b) `TABLE_HEADER_WIDTH_PROFILES` 외부 JSON 병합(런타임 사용자 프로필). **2026-07-12 사용자 결정: 이번 회차 보류.**
+
+---
+
+## 10. Track E 차기 개선 (2026-08-26 수립·대부분 실행 완료)
+
+> 기준 시점 현황: 유닛 테스트 **243 passed, 1 skipped**(2026-08-26 재실행 확인). Phase 0~3·Track C·D 완료, 한컴 호환 선언부 복원(08b2130)·GUI exe 재빌드(c6e91df) 반영 완료.
+> 실행 결과: E-1~E-4·E-7 완료(TDD 회귀 수정 1건 포함). E-5(보류)·E-6(미착수)은 남음.
+
+### 10-1. 잔여·후보 과제 목록
+
+| # | 과제 | 출처 | 난도 | 상태 |
+| :-- | :-- | :-- | :-- | :-- |
+| E-1 | **UPX 재설치 후 exe 재압축** — 현재 77.5MB(UPX 스킵), 재압축 시 ~70MB 복귀. 검증: 기동 smoke + CArchive 판독 | c6e91df 커밋 메시지 | 하 | ✅ 완료(2026-08-26) — 73,746,619 bytes(70.3MB), 기동 smoke 통과 |
+| E-2 | **COM 의존 잔여 검증 재개** — `--preflight` 통과 환경에서 `HWPX_RUN_COM_TESTS=1`로 `test_pdf_hwp_com_integration.py` 실행(PDF→HWPX→PDF native round-trip) | handoff.md "재개 시 다음 액션" | 하 (환경 의존) | ✅ 완료(2026-08-26) — 테스트 API 호출 결함 2건 수정 + E-7 근본 원인 수정 후 **최초로 green**(1584.6s) |
+| E-3 | **편집기 안전성 게이트 정례화** — 08b2130에서 1회성으로 쓴 python-hwpx 6.0.2 `editor_safety_gate --strict`를 `scripts/`에 상설화, 실변환 검수 절차에 포함 | 08b2130 검증 절차 | 하 | ✅ 완료(2026-08-26) — `scripts/hwpx_editor_safety_gate.py`, 번들 샘플 2종 PASS |
+| E-4 | **스테일 QA 잔재 정리** — `native-qa.txt`(mojibake 경로의 구 실패 로그, 현재 GUI 소스 존재로 무효) 삭제 또는 재실행 결과로 갱신, skip 1건(bs4) 처리 방침 결정(requirements 추가 vs skip 유지 명문화) | native-qa.txt·테스트 스위트 | 하 | ✅ 완료(2026-08-26) — 7개 상태 재실행 exit 0으로 갱신. skip 1건(bs4) 방침은 미결(하단 비고) |
+| E-5 | **서식 프로필 추출·재현** — §9 보류 항목 재개: (a) `scripts/extract_width_profile.py` (b) `TABLE_HEADER_WIDTH_PROFILES` 외부 JSON 병합 | §9 보류(2026-07-12) | 중 | 보류 유지 — 사용자 재결정 필요 |
+| E-6 | **PDF editable 환경 안내 강화** — Java 11 미만이면 opendataloader-pdf 불가·fallback 사용 중(현 환경 Java 8). 요건·품질 차이를 README·GUI 안내에 명시 | 테스트 실행 중 실측 경고 | 하 | 미착수 |
+| E-7 | **PDF layout 모드 SaveAs 왕복 시 콘텐츠 위치 어긋남** — E-2 COM 검증 중 신규 발견(§10-4) | E-2 실행 중 발견(2026-08-26) | 중 | ✅ 완료(2026-08-26, TDD) — `configure_pdf_page_setup()` 근본 원인 수정, 실COM round-trip 최초 green |
+
+### 10-2. 권장 실행 순서·완료 기준
+
+1. **1차 묶음(E-1·E-3·E-4)**: COM 불요·저위험 위생 작업. 완료 기준 — ① exe 크기 ≤71MB + 기동 smoke 통과 ② `editor_safety_gate` 스크립트가 번들 샘플 산출물에서 exit 0 ③ 스테일 로그 제거·skip 방침이 문서에 명문화됨. **→ 2026-08-26 전부 충족(①②③)**, 단 skip 방침 명문화는 미완(하단 비고).
+2. **2차(E-2)**: HWP COM 정상 응답 환경에서만. 완료 기준 — preflight OK + COM 통합 테스트 green, 결과를 verification-log.md에 기록. **→ 전부 충족(2026-08-26)**. preflight OK, E-7 근본 원인 수정 후 COM 통합 테스트가 이 테스트가 생성된 이래 최초로 green(1584.6s), verification-log.md 기록 완료.
+3. **3차(E-5·E-6)**: 기능 확장. E-5는 §9 보류 결정의 재확인이 선행 조건 — **사용자 승인 전 착수 금지**.
+
+### 10-3. 비고
+
+- E-1 exe 재빌드는 사용자 승인(winget UPX 설치) 후 진행함. E-4는 삭제 대신 **재실행 결과로 갱신**하는 방식을 택해 파일 삭제를 회피함.
+- skip 1건(bs4 미설치)의 처리 방침은 이번 회차에서 결정하지 않음 — 다음 착수 시 재확인.
+- 표 폭·서식 로직은 정본(§8-4·§8-6·§7-3) 준수 상태로 판단했던 전제는 유지되나, **PDF 레이아웃 모드의 왕복 재추출 경로**에서 신규 결함이 발견되어 아래 E-7로 등록함.
+
+### 10-4. E-7 (신규, 2026-08-26 발견·해결) — PDF layout 모드 SaveAs 왕복 시 콘텐츠 위치 어긋남
+
+> **상태: ✅ 해결(2026-08-26, TDD).** 아래는 발견 당시 기록 + 근본 원인·수정 내역.
+
+- **증상**: `PDF → HWPX(layout 모드) → HWP SaveAs 'PDF'` 왕복 시, 원본과 재추출 PDF의 비백색 콘텐츠 경계가 우측·하단으로 균일하게 약 84~98pt 이동. 콘텐츠 박스 크기 자체는 거의 보존(449×181 → 439×183).
+- **격리된 사실**: `configure_pdf_page_setup()`(anyway_to_hwpx_com.py:2351)이 여백을 전부 0으로 설정하고, HWPX 산출물 자체의 구조 계약(`pic`/`orgSz`/`curSz`/`sz`, pagePr)은 기존 COM 테스트(`_assert_hwpx_image_contract`)가 별도로 통과시킴 → **HWPX 산출물 구조는 정상으로 보이며, 어긋남은 HWP `SaveAs('PDF', '')` 재추출 단계 또는 `InsertPicture` 앵커 위치 자체**에서 발생하는 것으로 추정(근본 원인 미확정).
+- **왜 지금까지 미검출**: `tests/test_pdf_hwp_com_integration.py`는 `HWPX_RUN_COM_TESTS=1` 게이트 뒤에 있고, handoff.md 기록상 과거 모든 세션이 COM timeout으로 실행 자체를 건너뜀 — **2026-08-26이 이 테스트의 최초 실행**.
+- **선행 조치 완료**: 테스트 자체의 API 호출 결함 2건(`hwp.Open`·`hwp.SaveAs` 인자 개수 부족 — 실제 COM 타입라이브러리는 `Open(filename, Format, arg)`/`SaveAs(path, Format, arg)` 3-인자 필수)을 수정해 테스트가 실제 round-trip까지 도달하도록 만듦. 이 수정 자체는 변환기 코드 무변경(테스트 파일만).
+- **근본 원인(확정)**: `configure_pdf_page_setup()`이 쓰던 `hwp.CreateAction('PageSetup') → action.Execute(parameter_set)` 경로는 여백(TopMargin 등) 변경에 대해 `Execute()`가 `True`(성공)를 반환하지만 **실제로는 반영되지 않는 HWP COM 동작**이었다. 같은 세션에서 재조회하면 여백이 HWP 기본값(30/20/15/15mm)으로 그대로 남아 있었고, 이 기본 여백+헤더 영역(≈85pt+99pt)이 관측된 84~100pt 어긋남을 정량적으로 정확히 설명한다. `InsertPicture`가 삽입한 이미지 자체는 앵커 원점(0,0)에 정확히 배치돼 있었다(무죄).
+- **수정**: `hwp.CreateAction` 경로 대신 **`hwp.HParameterSet.HSecDef` + `hwp.HAction.GetDefault/Execute('PageSetup', sec.HSet)`**(속성 접근 방식) 경로로 재작성 — 이 경로는 실COM에서 여백 변경이 실제로 지속됨을 직접 확인. `anyway_to_hwpx_com.py`의 `configure_pdf_page_setup()` 수정.
+- **검증**: TDD로 `tests/test_pdf_hwp_image_writer.py`의 관련 계약 테스트 4건을 새 API 경로 기준으로 재작성(RED 확인 후 GREEN). 전체 COM-불요 스위트 243 passed 유지. 실COM `HWPX_RUN_COM_TESTS=1` 통합 테스트가 **테스트 생성 이래 최초로 green**(`test_generated_pdf_round_trips_through_hwp_image_pages`, 1584.6s).
+- **재현/재검증**: `HWPX_RUN_COM_TESTS=1 python -m unittest tests.test_pdf_hwp_com_integration` (Windows + 한컴오피스 COM 필요).
