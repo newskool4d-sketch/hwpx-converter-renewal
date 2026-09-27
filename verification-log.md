@@ -215,3 +215,12 @@
 - 산출물 `wave1_check.hwpx`(26,449 bytes) 구조 검증 7/7 PASS(mimetype·alt/URL 부재·여백·본문 줄 간격 160%·표 머리글·안전 게이트).
 - 비교 시도: 같은 원고를 Python CLI로 `C:\tmp\…\gui-test\out` 저장 → `SaveAs` 실패(exit 1). 직후 화면에 다른 문서가 한글에서 사용 중이어서 동시 사용과 겹쳤을 가능성 → 판정 불가, 재시험 필요(N16). 그 창은 조작하지 않음.
 - 보류: 저장본 한글 재열람(한글이 다른 작업에 사용 중).
+
+### 릴리스 `v2026.09.27` 발행 (2026-09-27)
+
+- 사전: `origin/main` = `d2b3343`(변동 없음), push 범위 6커밋·3파일, 경로·무관 문서명 노출 0건, 태그 미존재 확인.
+- push: `d2b3343..768e275`, `git ls-remote` = 로컬 `768e2755bcbbb15e8cc182b291829ad7ae4df5a4`.
+- 발행 직전 자산 재해시: 75,106,019 bytes, SHA-256 `53ebe077…b528`, 번들 839·90개.
+- `gh release create v2026.09.27 <C:/tmp/hwpx-gui-tcl9-spike/dist 자산> --target 768e275… --title "Anyway to HWPX GUI (2026-09-27)" --notes-file tests/out/track-f/release_notes_v2.md --latest`.
+- 사후: API 자산 `digest` = `sha256:53ebe077…b528`(로컬 일치), size 75,106,019, state uploaded / 태그 → `768e275` / 목록상 Latest / `19806ca`(E-7) 조상 확인 / `git ls-files dist` 비어 있음.
+- 로컬 `dist/anyway_to_hwpx_gui.exe`는 사용자 승인으로 같은 빌드로 교체(해시 사전 대조, ignored).
