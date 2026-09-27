@@ -2585,8 +2585,9 @@ def append_end_mark_blocks(blocks):
     return blocks + [{'type': 'p', 'text': '  끝.'}]
 
 
+# 끝 온점 앞 공백은 온점이 있을 때만 소비 — '2026.3.22 행사'의 뒤 공백 보존(N17)
 _OFFICIAL_DATE_PATTERN = re.compile(
-    r'(?<![\d.])(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*\.?(?!\d)'
+    r'(?<![\d.])(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})(?:\s*\.)?(?!\d)'
 )
 
 

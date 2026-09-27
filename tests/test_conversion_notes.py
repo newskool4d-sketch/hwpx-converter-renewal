@@ -191,20 +191,24 @@ class OfficialNormalizationTests(unittest.TestCase):
                 result = converter.convert_file(_FakeHwp(), source, Path(tmp) / "s.hwpx", **kwargs)
         return captured[0], result["notes"]
 
-    # 특성화(현행 고정): 날짜 뒤 공백 소실('2026. 3. 22.행사')은 기존 동작 그대로 기록 — N17 결정 전 변경 금지
+    # 특성화: --insert-end-mark 현행 의미(정규화 + '끝') 고정. 날짜 뒤 공백은 N17 수정(사용자 결정 2026-09-28)으로 보존
     def test_insert_end_mark_keeps_current_normalization_and_end_mark(self):
         blocks, _ = self._captured_blocks(insert_end_mark=True)
         self.assertEqual(blocks, [
-            {"type": "p", "text": "2026. 3. 22.행사"},
+            {"type": "p", "text": "2026. 3. 22. 행사"},
             {"type": "p", "text": "강사료 금400,000원(금사십만원)  끝."},
         ])
 
     def test_official_normalizes_without_end_mark(self):
         blocks, _ = self._captured_blocks(official=True)
         self.assertEqual(blocks, [
-            {"type": "p", "text": "2026. 3. 22.행사"},
+            {"type": "p", "text": "2026. 3. 22. 행사"},
             {"type": "p", "text": "강사료 금400,000원(금사십만원)"},
         ])
+
+    def test_date_normalization_keeps_following_space(self):  # N17
+        blocks = converter.normalize_official_dates([{"type": "p", "text": "2026.3.22 행사, 2026.3.23. 마감"}])
+        self.assertEqual(blocks[0]["text"], "2026. 3. 22. 행사, 2026. 3. 23. 마감")
 
     def test_default_leaves_text_untouched(self):
         blocks, _ = self._captured_blocks()
