@@ -21,6 +21,10 @@ class GuiCharacterizationTests(unittest.TestCase):
         self.assertIn("def start_conversion(self):", source)
         self.assertIn("if self.worker and self.worker.is_alive():", source)
 
+    def test_window_title_shows_converter_version(self) -> None:
+        source = GUI_SOURCE.read_text(encoding="utf-8")
+        self.assertIn('self.title(f"HWPX 변환기 {converter.__version__}")', source)
+
     def test_import_fallback_does_not_require_tkinterdnd2(self) -> None:
         source = GUI_SOURCE.read_text(encoding="utf-8")
         self.assertIn("BaseTk", source)

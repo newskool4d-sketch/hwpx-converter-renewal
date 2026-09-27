@@ -2,6 +2,8 @@
 HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX 변환.
 확장자를 자동 감지하여 내부 blocks 구조로 정규화한 뒤 HWP COM으로 저장.
 """
+__version__ = '2026.09.27+dev'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
+
 from pathlib import Path
 import argparse
 import copy
@@ -2955,6 +2957,7 @@ def main(argv=None):
         description='Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX 변환 (HWP COM 방식)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument('files', nargs='*', help='변환할 파일 경로')
     parser.add_argument('-o', '--output-dir', default=None, help='저장할 폴더 경로 (기본: 입력 파일과 같은 폴더)')
     parser.add_argument('--empty-output-folder', action='store_true', help='변환 전 앱 manifest가 관리하는 출력 폴더 파일만 비움')

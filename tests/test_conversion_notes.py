@@ -171,6 +171,18 @@ class TableColWidthNoteTests(unittest.TestCase):
         self.assertIn("[경고] 열 너비 조정 실패: COM 오류", notes)
 
 
+class VersionTests(unittest.TestCase):
+    def test_version_string_follows_release_date_scheme(self):
+        self.assertRegex(converter.__version__, r"^\d{4}\.\d{2}\.\d{2}(\+dev)?$")
+
+    def test_cli_version_prints_version_and_exits_zero(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+            converter.main(["--version"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn(converter.__version__, output.getvalue())
+
+
 class MarkdownMediaTests(unittest.TestCase):
     def setUp(self):
         converter.pop_conversion_notes()

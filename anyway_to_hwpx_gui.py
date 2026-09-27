@@ -44,7 +44,7 @@ from gui_theme import (
 class ConverterApp(BaseTk):
     def __init__(self, *, capabilities: RuntimeCapabilities | None = None):
         super().__init__()
-        self.title("HWPX 변환기")
+        self.title(f"HWPX 변환기 {converter.__version__}")
         self.geometry("800x680")
         self.minsize(700, 560)
         self.configure(bg=BG)
