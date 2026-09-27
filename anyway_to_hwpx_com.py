@@ -2862,6 +2862,7 @@ def convert_file(
     diagnose_stage: DiagnoseStageReporter | None = None,
     pdf_mode='layout',
     doc_type='plan',
+    official=False,
 ):
     src = as_path(src_path)
     out = as_path(hwpx_path)
@@ -2874,12 +2875,14 @@ def convert_file(
         rendered_layout = isinstance(parsed, RenderedPdfLayout)
         notes = pop_conversion_notes()
         blocks = parsed
-        if not rendered_layout and insert_end_mark:
+        # 공문 표기 정규화는 --official 단독으로도, --insert-end-mark(현행 의미: 정규화 포함)로도 켜진다
+        if not rendered_layout and (official or insert_end_mark):
             blocks = normalize_official_dates(blocks)
             blocks = normalize_official_amounts(blocks)
             notes.extend(lint_official_style(blocks))
             notes.extend(lint_money_notation(blocks))
-            blocks = append_end_mark_blocks(blocks)
+            if insert_end_mark:
+                blocks = append_end_mark_blocks(blocks)
         table_layouts = [
             {
                 'header': blk.get('header') or [],
@@ -2976,7 +2979,11 @@ def main(argv=None):
     parser.add_argument('files', nargs='*', help='변환할 파일 경로')
     parser.add_argument('-o', '--output-dir', default=None, help='저장할 폴더 경로 (기본: 입력 파일과 같은 폴더)')
     parser.add_argument('--empty-output-folder', action='store_true', help='변환 전 앱 manifest가 관리하는 출력 폴더 파일만 비움')
-    parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입")
+    parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입 (공문 표기 정규화 포함)")
+    parser.add_argument(
+        '--official', action='store_true',
+        help="공문 표기 정규화(날짜·금액)와 표기 점검만 적용 — '끝' 표시 없음 (--insert-end-mark는 이를 포함)",
+    )
     parser.add_argument(
         '--doc-type', choices=['plan', 'sihaengmun'], default='plan',
         help='항목체계 최상위 레벨: plan=Ⅰ.(계획서·보고서, 기본) / sihaengmun=1.(대외 시행문, 로마숫자 미사용)',
@@ -3050,6 +3057,7 @@ def main(argv=None):
                     diagnose_stage=diagnose_stage,
                     pdf_mode=args.pdf_mode,
                     doc_type=args.doc_type,
+                    official=args.official,
                 )
                 for note in (result or {}).get('notes', []):
                     print(f'  {note}', file=sys.stderr)

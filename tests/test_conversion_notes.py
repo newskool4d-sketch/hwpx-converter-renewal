@@ -171,6 +171,59 @@ class TableColWidthNoteTests(unittest.TestCase):
         self.assertIn("[경고] 열 너비 조정 실패: COM 오류", notes)
 
 
+class OfficialNormalizationTests(unittest.TestCase):
+    """공문 정규화(날짜·금액·표기 점검)와 '끝' 표시의 분리 — build_doc에 전달되는 blocks로 판정."""
+
+    def setUp(self):
+        converter.pop_conversion_notes()
+
+    def _captured_blocks(self, **kwargs):
+        captured = []
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "s.md"
+            source.write_text("2026.3.22 행사\n\n강사료 400,000원", encoding="utf-8")
+            with (
+                patch.object(converter, "build_doc", side_effect=lambda _hwp, blocks: captured.append(blocks)),
+                patch.object(converter.time, "sleep", return_value=None),
+            ):
+                result = converter.convert_file(_FakeHwp(), source, Path(tmp) / "s.hwpx", **kwargs)
+        return captured[0], result["notes"]
+
+    # 특성화(현행 고정): 날짜 뒤 공백 소실('2026. 3. 22.행사')은 기존 동작 그대로 기록 — N17 결정 전 변경 금지
+    def test_insert_end_mark_keeps_current_normalization_and_end_mark(self):
+        blocks, _ = self._captured_blocks(insert_end_mark=True)
+        self.assertEqual(blocks, [
+            {"type": "p", "text": "2026. 3. 22.행사"},
+            {"type": "p", "text": "강사료 금400,000원(금사십만원)  끝."},
+        ])
+
+    def test_official_normalizes_without_end_mark(self):
+        blocks, _ = self._captured_blocks(official=True)
+        self.assertEqual(blocks, [
+            {"type": "p", "text": "2026. 3. 22.행사"},
+            {"type": "p", "text": "강사료 금400,000원(금사십만원)"},
+        ])
+
+    def test_default_leaves_text_untouched(self):
+        blocks, _ = self._captured_blocks()
+        self.assertEqual(blocks, [{"type": "p", "text": "2026.3.22 행사"}, {"type": "p", "text": "강사료 400,000원"}])
+
+    def test_cli_official_and_doc_type_reach_convert_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "s.md"
+            source.write_text("본문", encoding="utf-8")
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                patch.object(converter, "create_hwp_object", return_value=_FakeHwp()),
+                patch.object(converter, "convert_file", return_value={"notes": []}) as convert,
+                patch.object(converter.time, "sleep", return_value=None),
+            ):
+                exit_code = converter.main([str(source), "-o", tmp, "--official", "--doc-type", "sihaengmun"])
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(convert.call_args.kwargs["official"])
+        self.assertEqual(convert.call_args.kwargs["doc_type"], "sihaengmun")
+
+
 class VersionTests(unittest.TestCase):
     def test_version_string_follows_release_date_scheme(self):
         self.assertRegex(converter.__version__, r"^\d{4}\.\d{2}\.\d{2}(\+dev)?$")
