@@ -6,6 +6,7 @@ __version__ = '2026.09.27+dev'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱
 
 from pathlib import Path
 import argparse
+import contextvars
 import copy
 import csv
 import json
@@ -195,13 +196,14 @@ def _normalize_parsed_table(header, rows):
 
 
 # 항목체계 로마숫자 최상위 레벨 허용 여부(정본 §2-1).
-# True  = 계획서·보고서 관행(Ⅰ. 최상위, 기본값)
-# False = 대외 시행문(1.이 최상위, 로마숫자 미인식)
-_ALLOW_ROMAN_LEVEL = True
+# True  = 계획서·보고서 관행(Ⅰ. 최상위, 기본값) / False = 대외 시행문(1.이 최상위, 로마숫자 미인식)
+# detect_and_parse(doc_type=…)가 변환 1건 범위로만 설정·복원한다(PDF 경로 포함, 변환 간·스레드 간 누수 없음).
+_ALLOW_ROMAN_LEVEL = contextvars.ContextVar('allow_roman_level', default=True)
+_DOC_TYPES = ('plan', 'sihaengmun')
 
 
 def _detect_list_item(line):
-    return detect_official_list_item(line, _clean_inline, allow_roman=_ALLOW_ROMAN_LEVEL)
+    return detect_official_list_item(line, _clean_inline, allow_roman=_ALLOW_ROMAN_LEVEL.get())
 
 
 _ATTACHMENT_HEAD_PATTERN = re.compile(r'^붙임\s*[::]?\s+(\S.*)$')
@@ -1634,7 +1636,17 @@ def parse_docx(docx_path):
 
 # ─── 확장자 자동 감지 ──────────────────────────────────────────────────────────
 
-def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None):
+def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None, doc_type='plan'):
+    if doc_type not in _DOC_TYPES:
+        raise ValueError(f'지원하지 않는 문서 유형: {doc_type} (지원: {", ".join(_DOC_TYPES)})')
+    token = _ALLOW_ROMAN_LEVEL.set(doc_type != 'sihaengmun')
+    try:
+        return _parse_by_extension(file_path, kordoc_home=kordoc_home, pdf_mode=pdf_mode, asset_dir=asset_dir)
+    finally:
+        _ALLOW_ROMAN_LEVEL.reset(token)
+
+
+def _parse_by_extension(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None):
     path = as_path(file_path)
     require_file(path)
     _conversion_notes.clear()
@@ -2849,6 +2861,7 @@ def convert_file(
     kordoc_home=None,
     diagnose_stage: DiagnoseStageReporter | None = None,
     pdf_mode='layout',
+    doc_type='plan',
 ):
     src = as_path(src_path)
     out = as_path(hwpx_path)
@@ -2938,6 +2951,7 @@ def convert_file(
                 kordoc_home=kordoc_home,
                 pdf_mode=selected_pdf_mode.value,
                 asset_dir=Path(temp_dir),
+                doc_type=doc_type,
             )
             result = convert_loaded(parsed)
     else:
@@ -2945,6 +2959,7 @@ def convert_file(
             src,
             kordoc_home=kordoc_home,
             pdf_mode=selected_pdf_mode.value,
+            doc_type=doc_type,
         )
         result = convert_loaded(parsed)
     ext = src.suffix.upper().lstrip('.')
@@ -3004,9 +3019,6 @@ def main(argv=None):
     if args.empty_output_folder and not args.output_dir:
         parser.error('--empty-output-folder는 -o/--output-dir와 함께 사용해야 함')
 
-    global _ALLOW_ROMAN_LEVEL
-    _ALLOW_ROMAN_LEVEL = (args.doc_type != 'sihaengmun')  # 정본 §2-1 항목체계 최상위 레벨
-
     hwp = None
     failures = []
     try:
@@ -3037,6 +3049,7 @@ def main(argv=None):
                     kordoc_home=args.kordoc_home,
                     diagnose_stage=diagnose_stage,
                     pdf_mode=args.pdf_mode,
+                    doc_type=args.doc_type,
                 )
                 for note in (result or {}).get('notes', []):
                     print(f'  {note}', file=sys.stderr)
