@@ -374,6 +374,7 @@ kordoc(v4.0.5) 업그레이드 후 참고 사항을 대조해 4개 항목 반영
 | N12 | 문서 스테일·경로 노출 — `handoff.md`(07-12), `dist/` 매뉴얼(05-28), 마스터 프롬프트 미추적(개인 경로 포함). 기추적 문서(본 파일 상단·`verification-log.md`)에도 사용자 절대경로 기공개 | 실측: ls·git status·Grep | 인계·안내 부정확, 추가 커밋 시 노출 확대 — 이후 추적 문서는 상대 경로만 | 🟡 |
 | N13 | (범위 밖) `.agents` 스킬 2곳이 존재하지 않는 `%USERPROFILE%\.Codex\to_hwpx_com.py` 안내 | 실측: Grep·Glob | Codex 측 HWPX 변환 실패 가능 | 별도 과제 |
 | N14 | 기록 오류 — §10-3·마스터 프롬프트의 "skip 1건 = bs4 미설치"가 현 환경과 불일치(실제 skip은 COM 게이트) | 실측: `unittest -v` skip 사유·`import bs4` | §10-3 미결 방침이 이미 해소됐는데 미결로 남음 | 🟡 |
+| N16 | 한글 자동화 파일 접근 확인 창 — 동결 exe GUI로 `C:\tmp\…` 저장 시 "한글을 이용하여 위 파일에 접근하려는 시도" 확인 창 발생(사용자 폴더 하위 저장인 기존 CLI 실행에서는 미발생). 코드의 `RegisterModule('FilePathCheckDLL', 'SecurityModule')` 모듈명과 레지스트리 등록명(`FilePathCheckerModule`) 불일치 — 원인 가설, 미검증. 같은 경로 CLI 비교는 다른 문서가 한글에서 사용 중인 시점과 겹쳐 판정 불가 | 실측: GUI 화면·레지스트리 읽기 / CLI 비교 재시험 필요 | 사용자 폴더 밖 저장 시 확인 창·저장 실패 가능(기존 동작으로 추정) | 🟡 |
 | N15 | **`c5438a8` exe 기동 불가** — 빌드 환경 Python 3.14.7의 Tcl/Tk가 9.0.4(라이브러리 DLL 내장 zipfs)로 바뀐 뒤 PyInstaller 6.20.0이 `_tcl_data`·`_tk_data`를 번들하지 않는데 런타임 훅 `pyi_rth__tkinter`는 `_tcl_data`를 요구 → 시작 시 `FileNotFoundError`("Unhandled exception in script" 대화상자). E-1의 "5초 기동 smoke"는 프로세스 생존만 판정해 거짓 통과 | 실측(2026-09-27): exe 실행 대화상자 원문, git 이력 exe 6개 판독(`83103a7`~`c6e91df` Tcl 8.6·데이터 832/89개 → `c5438a8` Tcl 9.0·0/0개), `info library` = `//zipfs:/lib/tcl/tcl_library`, PyInstaller 훅에 zipfs 처리 없음 | 현 환경에서 빌드하는 모든 exe가 기동 불가, D-1(현 exe 릴리스) 실행 불가. 공개 v2026.08.06(Tcl 8.6)은 영향 없음 | 🔴 |
 
 ### 11-4. 하류 호환 계약 (Track F 전 기간 불변)
@@ -545,6 +546,7 @@ python scripts/golden_run.py   # F-4 산출 예정
 | F-1d 릴리스 절차 | PASS | README.ko.md·README.md 개발자 절 |
 | F-1e 문서 점검·정정 | PASS / 갱신 보류 | §10-3 정정(N14) · `dist/` 안내 문서(05-28, txt·html·pdf 5종)는 PDF 두 모드·드래그 앤 드롭·저장 폴더 비우기·경고 대화상자 미반영 — 갱신은 사용자 확인 후 |
 | D-11 ① 시험 작업(브랜치 `spike/tcl9-bundle`) | PASS | spec이 Tcl/Tk 라이브러리가 zipfs일 때만 빌드 workpath로 복사해 `_tcl_data`·`_tk_data` 번들(Tcl 8.6이면 무동작) → 격리 빌드 `C:\tmp\hwpx-gui-tcl9-spike`(75,106,019 bytes, SHA-256 `53ebe0775ab0e6b005b7fc274f9dda0355779ebda8b488405af0d2d71809b528`) → 번들 839·90개(`init.tcl`·`tk.tcl`·`encoding` 83개) → 창 감지형 기동 2회 PASS(메인 창 12.4s·25.6s, 오류 대화상자 없음, `WM_CLOSE` exit 0) + 5초 유지 1회 PASS → 내장 코드에 E-7·웨이브 1 반영 확인. 채택(`main` 병합)·발행은 별도 확인 |
+| 동결 exe GUI 변환(채택 후, `ccd76bd` 빌드 입력) | PASS / 한글 재열람 보류 | 화면 조작으로 `wave1_check.md` 변환 → 로그 태그(`[확인 필요]` 빨강·`[참고]` 회색)·상태 "변환 완료 1개 · 확인 필요 1개"·대화상자 "변환 완료(확인 필요)" 확인(F-2b 동결 앱 종단 확인) → 산출물 구조 검증 7/7(안전 게이트 포함). 저장 경로 `C:\tmp\…`에서 한글 파일 접근 확인 창 발생 → 1회 "접근 허용"(N16). 저장본 한글 재열람은 다른 문서가 한글에서 사용 중이라 보류 |
 | F-1a 릴리스 | BLOCKED | 디스크 exe blob = `c5438a8` blob(`2a61e81`) · 73,746,447 bytes · SHA-256 `9369b286f1ed9bf23fe57c1f994181522ce151068820c57f6e8888554e818824` · 내장 `anyway_to_hwpx_com.pyc`에 E-7(`HSecDef`) 포함 판독 — 그러나 사용자 승인 후 실행한 창 감지형 기동 확인에서 60초 내 메인 창 미출현·"Unhandled exception in script" 대화상자(N15) → 발행 중단, 재개 조건 D-11 |
 
 - 공통 게이트: 단위 스위트 258 tests OK(skip 1 = COM 게이트) · `py_compile` · 실COM 변환 exit 0 · 안전 게이트 PASS · 한글 재열람·PDF 저장·1쪽 렌더 육안 확인 포함 실물 검증 11/11 PASS
