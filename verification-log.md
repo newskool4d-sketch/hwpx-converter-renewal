@@ -202,5 +202,6 @@
 - 수정(브랜치 `spike/tcl9-bundle`): `anyway_to_hwpx_gui.spec`의 `_tcl_tk_zipfs_datas()` — 숨김 Tk로 두 경로를 조회해 모두 zipfs일 때만 `workpath/tcl_tk_zipfs`에 `file copy` 후 `_tcl_data`·`_tk_data`로 datas 추가.
 - 빌드: `HWPX_GUI_PDF_STACK=full python -m PyInstaller --clean --noconfirm --distpath C:/tmp/hwpx-gui-tcl9-spike/dist --workpath C:/tmp/hwpx-gui-tcl9-spike/work anyway_to_hwpx_gui.spec` → exit 0, 75,106,019 bytes, SHA-256 `53ebe0775ab0e6b005b7fc274f9dda0355779ebda8b488405af0d2d71809b528`. UPX 실패 3건(arm64 tkdnd DLL CantPack, `_uuid.pyd`·`python3.dll` NotCompressible)은 비압축 포함.
 - 판독: `_tcl_data` 839·`_tk_data` 90개, `init.tcl`·`tk.tcl`·`encoding` 83개. 내장 `anyway_to_hwpx_com.pyc`에 `HSecDef`(E-7)·웨이브 1 문구 존재, 구 문구 부재.
-- 기동 확인(창 감지형) 2회: 메인 창 `TkTopLevel` "HWPX 변환기" 12.4s·25.6s 출현, `#32770` 없음, `WM_CLOSE` exit 0, 잔여 프로세스 없음. onefile 기동 시간 12~26s 관찰.
+- 기동 확인(창 감지형) 2회: 메인 창 `TkTopLevel` "HWPX 변환기" 12.4s·25.6s 출현, `#32770` 없음, `WM_CLOSE` exit 0, 잔여 프로세스 없음. 추가 유지 확인 1회: 13.6s 창 출현 → 5초 후 프로세스·창 유지 → `WM_CLOSE` exit 0. onefile 기동 시간 12~26s 관찰.
+- `scripts/packaging_smoke.ps1` 기본 모드는 import 검사만(spec 미평가) — 새 spec 영향 없음. `-Build` 모드는 위 빌드와 같은 명령.
 - 미실행: 동결 exe로 실제 GUI 변환 1건(스파이크 합격 기준 밖) — 발행 전 권장.
