@@ -785,4 +785,8 @@ print("HSecDef" in names(code))
 
 - [ ] **Step 4: 최종 확인 요청(사용자)** — 한 번에 제시: ① `feature/track-f-wave1` → `main` `--no-ff` 병합 후 push할 커밋·파일 목록 ② 릴리스 태그(권장 `v2026.08.27` → `c5438a8`)·제목·노트·자산 ③ exe 기동 smoke(사용자 직접 실행 또는 5초 기동 실행 승인) ④ 상위 `~/.claude` 서브모듈 포인터는 변경하지 않음
 
-- [ ] **Step 5: 승인 후 실행·재조회** — `git switch main` → `git merge --no-ff feature/track-f-wave1` → `git push origin main` → `gh release create <태그> dist/anyway_to_hwpx_gui.exe --target c5438a8 --title ... --notes-file tests/out/track-f/release_notes.md` → `gh release view <태그>`·`git ls-remote --tags origin`으로 태그·자산·크기 재조회, 결과를 §11-10에 기록
+- [ ] **Step 5: 승인 후 실행·재조회** — 순서 주의: 병합이 추적 해제(삭제)를 작업 트리에 적용해 로컬 exe가 사라지므로 릴리스를 먼저 발행
+  1. (기능 브랜치, exe 존재 상태) exe SHA-256 재확인 = `9369b286…8824` → `gh release create <태그> dist/anyway_to_hwpx_gui.exe --target c5438a8a72b7007fd0186c4f16642d0c45feb3ce --title "Anyway to HWPX GUI (2026-08-27)" --notes-file tests/out/track-f/release_notes.md` → `gh release view <태그>`로 태그·자산·크기 재조회
+  2. `git switch main` → `git merge --no-ff feature/track-f-wave1` → `git push origin main` → `git ls-remote origin main` 재조회
+  3. `git restore --source=c5438a8 -- dist/anyway_to_hwpx_gui.exe`(ignored 파일로 복원) → SHA-256 재확인
+  4. 결과를 §11-10에 기록(exe 기동 smoke 통과 시 릴리스 노트 "검증"에 기동 확인 1줄 추가)
