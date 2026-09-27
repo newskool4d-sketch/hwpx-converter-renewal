@@ -2277,7 +2277,11 @@ def apply_table_width_profiles(hwpx_path, table_headers):
     apply_table_layout_profiles(hwpx_path, table_layouts)
 
 
-def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_source=None, worksheet_title=None, merged_cells=None):
+def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_source=None, worksheet_title=None, merged_cells=None, try_col_width=True):
+    """표 삽입. 반환: TableColWidth 액션 사용 가능 여부(액션이 None이면 False).
+
+    열 너비는 XML 후처리(apply_table_layout_profiles)가 최종 적용하므로 COM 조정은 보조다.
+    """
     all_rows = ([header] if header else []) + rows
     if not all_rows:
         return
@@ -2308,26 +2312,27 @@ def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_s
         except Exception:
             pass
     _require_hwp_success(act.Execute(pset), 'TableCreate')
-    width_adjust_failed = False
+    col_width_available = True
     moved_right = 0
-    try:
-        for ci, w in enumerate(col_widths):
-            sel_act = hwp.CreateAction('TableColWidth')
-            if sel_act is None:
-                raise RuntimeError('TableColWidth action unavailable')
-            sel_pset = sel_act.CreateSet()
-            sel_act.GetDefault(sel_pset)
-            sel_pset.SetItem('Width', w)
-            sel_act.Execute(sel_pset)
-            if ci < num_cols - 1:
-                hwp.HAction.Run('TableRightCell')
-                moved_right += 1
-    except Exception as e:
-        width_adjust_failed = True
-        print(f'[경고] 열 너비 조정 실패: {e}')
-    finally:
-        for _ in range(moved_right):
-            hwp.HAction.Run('TableLeftCell')
+    if try_col_width:
+        try:
+            for ci, w in enumerate(col_widths):
+                sel_act = hwp.CreateAction('TableColWidth')
+                if sel_act is None:
+                    col_width_available = False
+                    break
+                sel_pset = sel_act.CreateSet()
+                sel_act.GetDefault(sel_pset)
+                sel_pset.SetItem('Width', w)
+                sel_act.Execute(sel_pset)
+                if ci < num_cols - 1:
+                    hwp.HAction.Run('TableRightCell')
+                    moved_right += 1
+        except Exception as e:
+            _add_conversion_note(f'[경고] 열 너비 조정 실패: {e}')
+        finally:
+            for _ in range(moved_right):
+                hwp.HAction.Run('TableLeftCell')
     first_cell = True
     for ri, row in enumerate(all_rows):
         is_header = (ri == 0 and header is not None)
@@ -2346,6 +2351,7 @@ def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_s
                 insert_text(hwp, cell_text)
     hwp.HAction.Run('MoveDocEnd')
     break_para(hwp)
+    return col_width_available
 
 
 def configure_pdf_page_setup(hwp, pages):
@@ -2414,6 +2420,7 @@ def insert_pdf_page_images(hwp, pages):
 
 def build_doc(hwp, blocks):
     first_depth1_li_seen = False
+    col_width_supported = True  # TableColWidth 미지원 확인 후에는 표마다 재시도하지 않음
 
     for i, blk in enumerate(blocks):
         t = blk.get('type')
@@ -2481,7 +2488,7 @@ def build_doc(hwp, blocks):
                 _blank_line(hwp)
             set_para_shape(hwp, align=0)
             set_char_shape(hwp, height=1200, font='table')
-            insert_table(
+            available = insert_table(
                 hwp,
                 blk.get('header'),
                 blk.get('rows', []),
@@ -2490,7 +2497,11 @@ def build_doc(hwp, blocks):
                 table_source=blk.get('table_source'),
                 worksheet_title=blk.get('worksheet_title'),
                 merged_cells=blk.get('merged_cells') or blk.get('merges'),
+                try_col_width=col_width_supported,
             )
+            if col_width_supported and not available:
+                col_width_supported = False
+                _add_conversion_note('[참고] 표 열 너비: 이 한글 버전은 TableColWidth 미지원 — XML 후처리로 적용')
             _blank_line(hwp)
 
         elif t == 'official_header':
