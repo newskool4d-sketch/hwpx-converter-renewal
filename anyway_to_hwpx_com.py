@@ -1661,15 +1661,13 @@ def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=N
             )
         if pdf_mode == PdfMode.EDITABLE.value and not capabilities.odl_enabled:
             if capabilities.java_major is not None and capabilities.java_major < 11:
-                _add_conversion_note(
-                    f'PDF editable fallback: Java {capabilities.java_major} is below 11, '
-                    'so opendataloader-pdf is unavailable; pdfplumber/PyMuPDF/pypdf fallback is used.'
-                )
+                reason = f'Java {capabilities.java_major}(11 미만)이라 opendataloader-pdf를 쓸 수 없어'
             else:
-                _add_conversion_note(
-                    'PDF editable fallback: opendataloader-pdf is unavailable; '
-                    'pdfplumber/PyMuPDF/pypdf fallback is used.'
-                )
+                reason = 'opendataloader-pdf를 쓸 수 없어'
+            _add_conversion_note(
+                f'[참고] PDF 편집 모드: {reason} pdfplumber·PyMuPDF·pypdf 대체 추출 사용 — '
+                '표·읽기 순서 품질을 높이려면 Java 11 이상 설치 후 full 스택 사용'
+            )
         return parse_pdf(
             path,
             kordoc_home=kordoc_home,

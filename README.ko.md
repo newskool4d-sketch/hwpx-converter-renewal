@@ -21,6 +21,7 @@ Markdown, TXT, DOCX, HTML, CSV, XLSX, PDF 파일을 한컴 HWP COM 자동화를 
 - `HWPFrame.HwpObject` COM 자동화 동작
 - PDF 입력: 아래 표의 `full` 또는 `text` 스택으로 빌드
 - 스캔 이미지 PDF: `kordoc-ai` 등 OCR 도구 (OCR은 실행 파일에 포함하지 않음)
+- PDF 편집 모드 고품질 추출(선택): Java 11 이상 — 미충족 시 대체 추출로 자동 전환되고 변환 로그에 안내 표시
 
 PDF 지원은 두 단계로 나뉩니다:
 

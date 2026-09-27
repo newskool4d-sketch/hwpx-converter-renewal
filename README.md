@@ -21,6 +21,7 @@ Download it, run it, select source files, choose an output folder, and start con
 - Working `HWPFrame.HwpObject` COM automation
 - For PDF input: use a build with the `full` or `text` PDF stack (see the matrix below)
 - For scanned image PDFs: an OCR tool such as `kordoc-ai` (the converter does not bundle OCR)
+- Higher-quality editable PDF extraction (optional): Java 11+ — otherwise the converter falls back automatically and notes it in the conversion log
 
 PDF support has two levels:
 
