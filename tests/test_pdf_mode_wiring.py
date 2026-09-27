@@ -264,8 +264,24 @@ class PdfModeWiringTests(unittest.TestCase):
 
         self.assertEqual(result, [{"type": "p", "text": "fallback"}])
         self.assertEqual(len(notes), 1)
+        self.assertTrue(notes[0].startswith("[참고] PDF 편집 모드"))
         self.assertIn("Java 8", notes[0])
-        self.assertIn("fallback", notes[0])
+        self.assertIn("Java 11 이상", notes[0])
+
+    def test_editable_pdf_reports_generic_fallback_note_without_java_version(self):
+        with TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.pdf"
+            source.write_bytes(b"%PDF")
+            capabilities = SimpleNamespace(pdf_enabled=True, odl_enabled=False, java_major=None)
+            with patch.object(converter, "detect_capabilities", return_value=capabilities), patch.object(
+                converter, "parse_pdf", return_value=[{"type": "p", "text": "fallback"}]
+            ):
+                converter.detect_and_parse(source, pdf_mode="editable")
+                notes = converter.pop_conversion_notes()
+
+        self.assertEqual(len(notes), 1)
+        self.assertTrue(notes[0].startswith("[참고] PDF 편집 모드"))
+        self.assertIn("Java 11 이상", notes[0])
 
 
 def _render_fake_page(asset_dir: Path) -> RenderedPdfLayout:

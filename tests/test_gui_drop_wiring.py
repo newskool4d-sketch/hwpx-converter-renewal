@@ -155,7 +155,7 @@ class GuiCharacterizationTests(unittest.TestCase):
                     ("log", "변환 중: source.md → source.hwpx", None),
                     ("progress", 1, 1, "source.md"),
                     ("log", "완료: source.hwpx", "ok"),
-                    ("done", 1, []),
+                    ("done", 1, [], []),
                 ],
             )
             self.assertEqual(quit_calls, [True])

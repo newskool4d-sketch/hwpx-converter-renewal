@@ -124,9 +124,13 @@ def _kordoc_commands(kordoc_dir, path):
 
 # ─── Markdown 파서 ─────────────────────────────────────────────────────────────
 
+_MD_IMAGE_PATTERN = re.compile(r'!\[[^\]]*\]\([^\)]+\)')
+_MD_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\([^\)]+\)')
+
+
 def _clean_inline(text):
-    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-    text = re.sub(r'!\[[^\]]*\]\([^\)]+\)', '', text)
+    text = _MD_IMAGE_PATTERN.sub('', text)  # 링크보다 먼저 — 순서가 바뀌면 '!alt'가 본문에 남음
+    text = _MD_LINK_PATTERN.sub(r'\1', text)
     text = re.sub(r'`([^`]+)`', r'\1', text)
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
     text = re.sub(r'__([^_]+)__', r'\1', text)
@@ -366,7 +370,27 @@ def parse_markdown(text):
             blocks.append({'type': 'p', 'text': t})
         i += 1
 
+    images, links = _markdown_media_counts(text)
+    if images:
+        _add_conversion_note(f'[확인 필요] Markdown 이미지 {images}개 미삽입(이미지 삽입 미지원) — 필요 시 한글에서 직접 삽입')
+    if links:
+        _add_conversion_note(f'[참고] Markdown 링크 {links}개는 표시 텍스트만 유지(URL 제외)')
     return blocks
+
+
+def _markdown_media_counts(text):
+    """코드 블록 밖 Markdown 이미지·링크 수 (parse_markdown과 같은 ``` 경계 규칙)."""
+    images = links = 0
+    in_code = False
+    for line in text.splitlines():
+        if line.strip().startswith('```'):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        images += len(_MD_IMAGE_PATTERN.findall(line))
+        links += len(_MD_LINK_PATTERN.findall(_MD_IMAGE_PATTERN.sub('', line)))
+    return images, links
 
 
 def _split_tab_row(line):
@@ -858,7 +882,6 @@ _conversion_notes = []
 
 def _add_conversion_note(message):
     _conversion_notes.append(message)
-    print(message)
 
 
 def pop_conversion_notes():
@@ -1638,15 +1661,13 @@ def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=N
             )
         if pdf_mode == PdfMode.EDITABLE.value and not capabilities.odl_enabled:
             if capabilities.java_major is not None and capabilities.java_major < 11:
-                _add_conversion_note(
-                    f'PDF editable fallback: Java {capabilities.java_major} is below 11, '
-                    'so opendataloader-pdf is unavailable; pdfplumber/PyMuPDF/pypdf fallback is used.'
-                )
+                reason = f'Java {capabilities.java_major}(11 미만)이라 opendataloader-pdf를 쓸 수 없어'
             else:
-                _add_conversion_note(
-                    'PDF editable fallback: opendataloader-pdf is unavailable; '
-                    'pdfplumber/PyMuPDF/pypdf fallback is used.'
-                )
+                reason = 'opendataloader-pdf를 쓸 수 없어'
+            _add_conversion_note(
+                f'[참고] PDF 편집 모드: {reason} pdfplumber·PyMuPDF·pypdf 대체 추출 사용 — '
+                '표·읽기 순서 품질을 높이려면 Java 11 이상 설치 후 full 스택 사용'
+            )
         return parse_pdf(
             path,
             kordoc_home=kordoc_home,
@@ -1949,7 +1970,7 @@ def apply_list_hanging_indents(hwpx_path):
             return
         _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(root))
     except Exception as e:
-        print(f'[경고] 목록 내어쓰기 후처리 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 목록 내어쓰기 후처리 실패: {e}')
 
 
 # 공문서 목록 마커 패턴 (텍스트가 이 패턴으로 시작하면 목록 항목)
@@ -2028,7 +2049,7 @@ def fix_body_text_prid(hwpx_path):
         if changed:
             _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(sroot))
     except Exception as e:
-        print(f'[경고] 본문 단락 paraPr 보정 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 본문 단락 paraPr 보정 실패: {e}')
 
 
 # 페이지 여백 (HWPX_작성규칙 7-2): 상 25 / 하 20 / 좌우 25 / 머리말·꼬리말 10 (mm)
@@ -2078,7 +2099,7 @@ def apply_official_line_spacing(hwpx_path):
         if changed:
             _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(root))
     except Exception as e:
-        print(f'[경고] 줄 간격 후처리 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 줄 간격 후처리 실패: {e}')
 
 
 # 정본 §7-3 제목 단락 간격 (앞, 뒤) — 1pt = 100 HWPUNIT
@@ -2214,14 +2235,14 @@ def apply_official_paragraph_spacing(hwpx_path):
         section_root = ET.fromstring(section_xml)
         changed, cloned = _set_heading_para_spacing(header_root, section_root)
         if cloned:
-            print(f'  [참고] 제목 단락 간격: 공유 paraPr {cloned}건 분리 적용 (§7-3)', file=sys.stderr)
+            _add_conversion_note(f'[참고] 제목 단락 간격: 공유 paraPr {cloned}건 분리 적용 (§7-3)')
         if changed:
             _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(header_root))
         if cloned:
             # clone 재배정은 section0.xml의 paraPrIDRef를 바꾸므로 반드시 함께 기록
             _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(section_root))
     except Exception as e:
-        print(f'[경고] 단락 간격 후처리 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 단락 간격 후처리 실패: {e}')
 
 
 def apply_official_page_margins(hwpx_path):
@@ -2247,7 +2268,7 @@ def apply_official_page_margins(hwpx_path):
         if changed:
             _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(root))
     except Exception as e:
-        print(f'[경고] 페이지 여백 후처리 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 페이지 여백 후처리 실패: {e}')
 
 
 def _section_text_width(root):
@@ -2269,7 +2290,8 @@ def _section_text_width(root):
 
 
 def apply_table_layout_profiles(hwpx_path, table_layouts):
-    _apply_table_layout_profiles_new(hwpx_path, table_layouts)
+    for note in _apply_table_layout_profiles_new(hwpx_path, table_layouts) or ():
+        _add_conversion_note(note)
 
 
 def apply_table_width_profiles(hwpx_path, table_headers):
@@ -2277,7 +2299,11 @@ def apply_table_width_profiles(hwpx_path, table_headers):
     apply_table_layout_profiles(hwpx_path, table_layouts)
 
 
-def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_source=None, worksheet_title=None, merged_cells=None):
+def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_source=None, worksheet_title=None, merged_cells=None, try_col_width=True):
+    """표 삽입. 반환: TableColWidth 액션 사용 가능 여부(액션이 None이면 False).
+
+    열 너비는 XML 후처리(apply_table_layout_profiles)가 최종 적용하므로 COM 조정은 보조다.
+    """
     all_rows = ([header] if header else []) + rows
     if not all_rows:
         return
@@ -2308,26 +2334,27 @@ def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_s
         except Exception:
             pass
     _require_hwp_success(act.Execute(pset), 'TableCreate')
-    width_adjust_failed = False
+    col_width_available = True
     moved_right = 0
-    try:
-        for ci, w in enumerate(col_widths):
-            sel_act = hwp.CreateAction('TableColWidth')
-            if sel_act is None:
-                raise RuntimeError('TableColWidth action unavailable')
-            sel_pset = sel_act.CreateSet()
-            sel_act.GetDefault(sel_pset)
-            sel_pset.SetItem('Width', w)
-            sel_act.Execute(sel_pset)
-            if ci < num_cols - 1:
-                hwp.HAction.Run('TableRightCell')
-                moved_right += 1
-    except Exception as e:
-        width_adjust_failed = True
-        print(f'[경고] 열 너비 조정 실패: {e}')
-    finally:
-        for _ in range(moved_right):
-            hwp.HAction.Run('TableLeftCell')
+    if try_col_width:
+        try:
+            for ci, w in enumerate(col_widths):
+                sel_act = hwp.CreateAction('TableColWidth')
+                if sel_act is None:
+                    col_width_available = False
+                    break
+                sel_pset = sel_act.CreateSet()
+                sel_act.GetDefault(sel_pset)
+                sel_pset.SetItem('Width', w)
+                sel_act.Execute(sel_pset)
+                if ci < num_cols - 1:
+                    hwp.HAction.Run('TableRightCell')
+                    moved_right += 1
+        except Exception as e:
+            _add_conversion_note(f'[경고] 열 너비 조정 실패: {e}')
+        finally:
+            for _ in range(moved_right):
+                hwp.HAction.Run('TableLeftCell')
     first_cell = True
     for ri, row in enumerate(all_rows):
         is_header = (ri == 0 and header is not None)
@@ -2346,6 +2373,7 @@ def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_s
                 insert_text(hwp, cell_text)
     hwp.HAction.Run('MoveDocEnd')
     break_para(hwp)
+    return col_width_available
 
 
 def configure_pdf_page_setup(hwp, pages):
@@ -2414,6 +2442,7 @@ def insert_pdf_page_images(hwp, pages):
 
 def build_doc(hwp, blocks):
     first_depth1_li_seen = False
+    col_width_supported = True  # TableColWidth 미지원 확인 후에는 표마다 재시도하지 않음
 
     for i, blk in enumerate(blocks):
         t = blk.get('type')
@@ -2481,7 +2510,7 @@ def build_doc(hwp, blocks):
                 _blank_line(hwp)
             set_para_shape(hwp, align=0)
             set_char_shape(hwp, height=1200, font='table')
-            insert_table(
+            available = insert_table(
                 hwp,
                 blk.get('header'),
                 blk.get('rows', []),
@@ -2490,7 +2519,11 @@ def build_doc(hwp, blocks):
                 table_source=blk.get('table_source'),
                 worksheet_title=blk.get('worksheet_title'),
                 merged_cells=blk.get('merged_cells') or blk.get('merges'),
+                try_col_width=col_width_supported,
             )
+            if col_width_supported and not available:
+                col_width_supported = False
+                _add_conversion_note('[참고] 표 열 너비: 이 한글 버전은 TableColWidth 미지원 — XML 후처리로 적용')
             _blank_line(hwp)
 
         elif t == 'official_header':
@@ -2880,6 +2913,7 @@ def convert_file(
             _com_call(lambda: doc.Close(isDirty=False))
             time.sleep(0.3)
         if rendered_layout:
+            notes.extend(pop_conversion_notes())
             return {'notes': notes}
         if diagnose_stage:
             diagnose_stage('postprocess')
@@ -2889,6 +2923,7 @@ def convert_file(
         fix_body_text_prid(out)
         apply_official_line_spacing(out)
         apply_official_paragraph_spacing(out)
+        notes.extend(pop_conversion_notes())  # 빌드·후처리 단계 note 합류
         if diagnose_stage:
             diagnose_stage('finalize')
         return {'notes': notes}

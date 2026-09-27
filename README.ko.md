@@ -21,6 +21,7 @@ Markdown, TXT, DOCX, HTML, CSV, XLSX, PDF 파일을 한컴 HWP COM 자동화를 
 - `HWPFrame.HwpObject` COM 자동화 동작
 - PDF 입력: 아래 표의 `full` 또는 `text` 스택으로 빌드
 - 스캔 이미지 PDF: `kordoc-ai` 등 OCR 도구 (OCR은 실행 파일에 포함하지 않음)
+- PDF 편집 모드 고품질 추출(선택): Java 11 이상 — 미충족 시 대체 추출로 자동 전환되고 변환 로그에 안내 표시
 
 PDF 지원은 두 단계로 나뉩니다:
 
@@ -181,3 +182,10 @@ python -m PyInstaller --clean --noconfirm `
 spec은 `tkinterdnd2`의 데이터·네이티브 바이너리·hidden import를 명시적으로 수집합니다. 실행 시 이 패키지가 없으면 표준 파일 선택기로 자동 전환하며 드래그 앤 드롭만 사용할 수 없습니다. 레이아웃 경로는 PyMuPDF의 `Pixmap.tobytes("png")` 직접 저장을 유지하므로 Pillow(PIL)는 의도적으로 제외합니다.
 
 배포 전 PyInstaller 경고, 특히 선택적 PDF/OCR 모듈 관련 경고를 확인하세요. PyInstaller 종료 코드 0만으로 성공을 판단하지 말고, 지정한 `C:\tmp` dist 경로의 실행 파일과 경고 로그를 함께 확인합니다.
+
+### 릴리스 절차
+
+1. `python -m unittest discover -s tests`·`python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py` 통과
+2. 샘플 실변환 후 `python scripts/hwpx_editor_safety_gate.py <산출물>` PASS, 한글에서 열어 여백·글꼴 육안 확인
+3. 격리 빌드(위 명령) 후 실행 파일 기동 확인 — 메인 창("HWPX 변환기") 표시와 "Unhandled exception in script" 대화상자 부재로 판정(프로세스 생존만으로 판정 금지)
+4. 실행 파일 SHA-256·크기 기록 → GitHub Release에 첨부(태그는 빌드한 커밋에). 실행 파일은 저장소에 커밋하지 않음

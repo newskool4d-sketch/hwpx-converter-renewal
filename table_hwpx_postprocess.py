@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 import os
 import shutil
-import sys
 import tempfile
 import zipfile
 import xml.etree.ElementTree as ET
@@ -218,21 +217,23 @@ def _read_header_root(hwpx_path, header_name: str) -> ET.Element | None:
         return None
 
 
-def apply_table_layout_profiles(hwpx_path, table_layouts: Sequence[TableLayout | TableBlock]) -> None:
-    apply_table_width_profiles(hwpx_path, table_layouts)
+def apply_table_layout_profiles(hwpx_path, table_layouts: Sequence[TableLayout | TableBlock]) -> list[str]:
+    return apply_table_width_profiles(hwpx_path, table_layouts)
 
 
-def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | TableBlock]) -> None:
+def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | TableBlock]) -> list[str]:
+    """표 폭·테두리·병합 후처리. 반환: 사용자에게 전달할 경고 note 목록(없으면 빈 목록)."""
+    notes: list[str] = []
     if not table_layouts or not os.path.exists(hwpx_path):
-        return
+        return notes
     section_name = "Contents/section0.xml"
     header_name = "Contents/header.xml"
     try:
         with zipfile.ZipFile(hwpx_path, "r") as zf:
             section_xml = zf.read(section_name)
     except (KeyError, OSError, zipfile.BadZipFile) as exc:
-        print(f"  [경고] 표 후처리 준비 실패: {exc}", file=sys.stderr)
-        return
+        notes.append(f"[경고] 표 후처리 준비 실패: {exc}")
+        return notes
     try:
         register_hwpx_namespaces()
         root = ET.fromstring(section_xml)
@@ -264,7 +265,7 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
             spans = _span_by_addr(layout)
             spans, dropped_spans = _filter_spans_to_grid(spans, len(widths), len(row_heights))
             if dropped_spans:
-                print(f"  [경고] 격자 범위를 벗어난 병합 {len(dropped_spans)}건 무시", file=sys.stderr)
+                notes.append(f"[경고] 격자 범위를 벗어난 병합 {len(dropped_spans)}건 무시")
             cell_para_space = calc_table_cell_para_space(layout.header, layout.rows, widths)
             after_para_space = calc_table_after_para_space(layout.header, layout.rows, widths)
             changed = _ensure_table_cell_margin(tbl, calc_table_cell_margin(layout.header, layout.rows, widths)) or changed
@@ -316,4 +317,5 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
         if changed:
             _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(root))
     except (ET.ParseError, OSError, ValueError, zipfile.BadZipFile) as exc:
-        print(f"  [경고] 표 후처리 실패: {exc}", file=sys.stderr)
+        notes.append(f"[경고] 표 후처리 실패: {exc}")
+    return notes
