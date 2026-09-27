@@ -541,7 +541,7 @@ python scripts/golden_run.py   # F-4 산출 예정
 | F-2d `TableColWidth` 1회 `[참고]` | PASS | 표 2개 → 조회 1회(단위 테스트) · 실COM 변환에서 `[참고]` 1회·`[경고]` 0건 |
 | F-2e Markdown 이미지·링크 | PASS | `!alt` 잔류 결함 RED 재현 → 수정 · 실COM 산출물 본문에 alt·URL 부재 · note 각 1회 |
 | F-2f Java 안내 한국어화(E-6) | PASS | 단위 테스트 2건(버전 확인·미확인 분기) · README 요구 사항 보강 |
-| F-1b exe 추적 해제 | PARTIAL | 로컬 커밋 완료(`git ls-files dist` 비어 있음) — push는 최종 확인 대기 |
+| F-1b exe 추적 해제 | PASS | `main`에 `--no-ff` 병합(`d2b3343`) 후 push, `git ls-remote` 재조회 일치 · `git ls-files dist` 비어 있음 · 병합으로 작업 트리에서 빠진 로컬 exe는 `c5438a8` blob에서 덮어쓰기 금지 방식으로 복원(SHA-256 일치, ignored) |
 | F-1d 릴리스 절차 | PASS | README.ko.md·README.md 개발자 절 |
 | F-1e 문서 점검·정정 | PASS / 갱신 보류 | §10-3 정정(N14) · `dist/` 안내 문서(05-28, txt·html·pdf 5종)는 PDF 두 모드·드래그 앤 드롭·저장 폴더 비우기·경고 대화상자 미반영 — 갱신은 사용자 확인 후 |
 | F-1a 릴리스 | BLOCKED | 디스크 exe blob = `c5438a8` blob(`2a61e81`) · 73,746,447 bytes · SHA-256 `9369b286f1ed9bf23fe57c1f994181522ce151068820c57f6e8888554e818824` · 내장 `anyway_to_hwpx_com.pyc`에 E-7(`HSecDef`) 포함 판독 — 그러나 사용자 승인 후 실행한 창 감지형 기동 확인에서 60초 내 메인 창 미출현·"Unhandled exception in script" 대화상자(N15) → 발행 중단, 재개 조건 D-11 |
