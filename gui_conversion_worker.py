@@ -38,6 +38,8 @@ class ConversionSnapshot:
     empty_output_folder: bool
     insert_end_mark: bool
     pdf_mode: str
+    official: bool = False
+    doc_type: str = "plan"
 
 
 def run_conversion(snapshot: ConversionSnapshot, message_sink: MessageSink) -> None:
@@ -68,6 +70,8 @@ def run_conversion(snapshot: ConversionSnapshot, message_sink: MessageSink) -> N
                     insert_end_mark=snapshot.insert_end_mark,
                     kordoc_home=None,
                     pdf_mode=snapshot.pdf_mode,
+                    official=snapshot.official,
+                    doc_type=snapshot.doc_type,
                 )
                 converter.record_output_file(prepared_output_dir, out_path)
                 completed += 1

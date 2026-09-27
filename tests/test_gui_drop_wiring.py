@@ -21,6 +21,13 @@ class GuiCharacterizationTests(unittest.TestCase):
         self.assertIn("def start_conversion(self):", source)
         self.assertIn("if self.worker and self.worker.is_alive():", source)
 
+    def test_layout_offers_doc_type_and_official_controls(self) -> None:
+        layout = (Path(__file__).parents[1] / "gui_layout.py").read_text(encoding="utf-8")
+        self.assertIn('value="plan", variable=app.doc_type', layout)
+        self.assertIn('value="sihaengmun", variable=app.doc_type', layout)
+        self.assertIn("variable=app.official", layout)
+        self.assertIn("(정규화 포함)", layout)
+
     def test_window_title_shows_converter_version(self) -> None:
         source = GUI_SOURCE.read_text(encoding="utf-8")
         self.assertIn('self.title(f"HWPX 변환기 {converter.__version__}")', source)
@@ -61,6 +68,8 @@ class GuiCharacterizationTests(unittest.TestCase):
         app.empty_output_folder = Value(False)
         app.insert_end_mark = Value(True)
         app.pdf_mode = Value("editable")
+        app.official = Value(True)
+        app.doc_type = Value("sihaengmun")
         app.worker = None
         app.progress = Progress()
         app.status = Value("")
@@ -71,9 +80,13 @@ class GuiCharacterizationTests(unittest.TestCase):
         with patch.object(gui.threading, "Thread", Thread):
             app.start_conversion()
 
-        self.assertEqual(started, [(tuple(["source.pdf"]), "output", False, True, "editable")])
+        self.assertEqual(
+            started, [(tuple(["source.pdf"]), "output", False, True, "editable", True, "sihaengmun")]
+        )
         app.pdf_mode.value = "layout"
-        self.assertEqual(started[0][-1], "editable")
+        app.doc_type.value = "plan"
+        self.assertEqual(started[0][4], "editable")
+        self.assertEqual(started[0][-1], "sihaengmun")
 
     def test_conversion_snapshot_worker_emits_equivalent_messages_after_gui_state_changes(self) -> None:
         class Value:
@@ -114,6 +127,8 @@ class GuiCharacterizationTests(unittest.TestCase):
         app.empty_output_folder = Value(False)
         app.insert_end_mark = Value(False)
         app.pdf_mode = Value("layout")
+        app.official = Value(True)
+        app.doc_type = Value("sihaengmun")
         app.worker = None
         app.progress = Progress()
         app.status = Value("")
@@ -146,12 +161,14 @@ class GuiCharacterizationTests(unittest.TestCase):
                 worker.converter, "create_hwp_object", return_value=Hwp()
             ), patch.object(worker.converter, "as_path", return_value=source), patch.object(
                 worker.converter, "build_output_path", return_value=output / "source.hwpx"
-            ), patch.object(worker.converter, "convert_file", return_value={}), patch.object(
+            ), patch.object(worker.converter, "convert_file", return_value={}) as convert_file, patch.object(
                 worker.converter, "record_output_file"
             ):
                 thread.target(*thread.args)
 
             self.assertEqual(prepare_output_dir.call_args.args[0], str(output))
+            self.assertTrue(convert_file.call_args.kwargs["official"])
+            self.assertEqual(convert_file.call_args.kwargs["doc_type"], "sihaengmun")
             self.assertEqual(
                 [app.messages.get_nowait() for _ in range(app.messages.qsize())],
                 [
