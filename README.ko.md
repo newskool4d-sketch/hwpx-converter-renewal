@@ -182,3 +182,10 @@ python -m PyInstaller --clean --noconfirm `
 spec은 `tkinterdnd2`의 데이터·네이티브 바이너리·hidden import를 명시적으로 수집합니다. 실행 시 이 패키지가 없으면 표준 파일 선택기로 자동 전환하며 드래그 앤 드롭만 사용할 수 없습니다. 레이아웃 경로는 PyMuPDF의 `Pixmap.tobytes("png")` 직접 저장을 유지하므로 Pillow(PIL)는 의도적으로 제외합니다.
 
 배포 전 PyInstaller 경고, 특히 선택적 PDF/OCR 모듈 관련 경고를 확인하세요. PyInstaller 종료 코드 0만으로 성공을 판단하지 말고, 지정한 `C:\tmp` dist 경로의 실행 파일과 경고 로그를 함께 확인합니다.
+
+### 릴리스 절차
+
+1. `python -m unittest discover -s tests`·`python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py` 통과
+2. 샘플 실변환 후 `python scripts/hwpx_editor_safety_gate.py <산출물>` PASS, 한글에서 열어 여백·글꼴 육안 확인
+3. 격리 빌드(위 명령) 후 실행 파일 기동 확인
+4. 실행 파일 SHA-256·크기 기록 → GitHub Release에 첨부(태그는 빌드한 커밋에). 실행 파일은 저장소에 커밋하지 않음

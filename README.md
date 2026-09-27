@@ -182,3 +182,10 @@ To opt into isolated builds through the helper, use `.\scripts\packaging_smoke.p
 The spec explicitly collects `tkinterdnd2` data, native binaries, and hidden imports. If that optional package is absent at runtime, the GUI falls back to the standard file picker; drag-and-drop is unavailable but conversion remains usable. Pillow is intentionally excluded: the layout path keeps PyMuPDF's direct `Pixmap.tobytes("png")` save path and does not require PIL.
 
 Review PyInstaller warnings before distribution, especially optional PDF/OCR modules. A build is not successful merely because PyInstaller exits 0; confirm the executable exists under the requested `C:\tmp` dist path and inspect warnings.
+
+### Release checklist
+
+1. `python -m unittest discover -s tests` and `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py` pass
+2. Convert a sample for real, run `python scripts/hwpx_editor_safety_gate.py <output>` (PASS), and open it in Hancom HWP to check margins and fonts
+3. Build in an isolated path (commands above) and confirm the executable launches
+4. Record the executable's SHA-256 and size, then attach it to a GitHub Release tagged at the commit it was built from. Do not commit the executable to the repository
