@@ -187,5 +187,5 @@ Review PyInstaller warnings before distribution, especially optional PDF/OCR mod
 
 1. `python -m unittest discover -s tests` and `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py` pass
 2. Convert a sample for real, run `python scripts/hwpx_editor_safety_gate.py <output>` (PASS), and open it in Hancom HWP to check margins and fonts
-3. Build in an isolated path (commands above) and confirm the executable launches
+3. Build in an isolated path (commands above) and confirm the executable launches — judge by the main window ("HWPX 변환기") appearing and no "Unhandled exception in script" dialog, not by the process merely staying alive
 4. Record the executable's SHA-256 and size, then attach it to a GitHub Release tagged at the commit it was built from. Do not commit the executable to the repository

@@ -374,6 +374,7 @@ kordoc(v4.0.5) 업그레이드 후 참고 사항을 대조해 4개 항목 반영
 | N12 | 문서 스테일·경로 노출 — `handoff.md`(07-12), `dist/` 매뉴얼(05-28), 마스터 프롬프트 미추적(개인 경로 포함). 기추적 문서(본 파일 상단·`verification-log.md`)에도 사용자 절대경로 기공개 | 실측: ls·git status·Grep | 인계·안내 부정확, 추가 커밋 시 노출 확대 — 이후 추적 문서는 상대 경로만 | 🟡 |
 | N13 | (범위 밖) `.agents` 스킬 2곳이 존재하지 않는 `%USERPROFILE%\.Codex\to_hwpx_com.py` 안내 | 실측: Grep·Glob | Codex 측 HWPX 변환 실패 가능 | 별도 과제 |
 | N14 | 기록 오류 — §10-3·마스터 프롬프트의 "skip 1건 = bs4 미설치"가 현 환경과 불일치(실제 skip은 COM 게이트) | 실측: `unittest -v` skip 사유·`import bs4` | §10-3 미결 방침이 이미 해소됐는데 미결로 남음 | 🟡 |
+| N15 | **`c5438a8` exe 기동 불가** — 빌드 환경 Python 3.14.7의 Tcl/Tk가 9.0.4(라이브러리 DLL 내장 zipfs)로 바뀐 뒤 PyInstaller 6.20.0이 `_tcl_data`·`_tk_data`를 번들하지 않는데 런타임 훅 `pyi_rth__tkinter`는 `_tcl_data`를 요구 → 시작 시 `FileNotFoundError`("Unhandled exception in script" 대화상자). E-1의 "5초 기동 smoke"는 프로세스 생존만 판정해 거짓 통과 | 실측(2026-09-27): exe 실행 대화상자 원문, git 이력 exe 6개 판독(`83103a7`~`c6e91df` Tcl 8.6·데이터 832/89개 → `c5438a8` Tcl 9.0·0/0개), `info library` = `//zipfs:/lib/tcl/tcl_library`, PyInstaller 훅에 zipfs 처리 없음 | 현 환경에서 빌드하는 모든 exe가 기동 불가, D-1(현 exe 릴리스) 실행 불가. 공개 v2026.08.06(Tcl 8.6)은 영향 없음 | 🔴 |
 
 ### 11-4. 하류 호환 계약 (Track F 전 기간 불변)
 
@@ -505,6 +506,7 @@ kordoc(v4.0.5) 업그레이드 후 참고 사항을 대조해 4개 항목 반영
 | D-8 | §10-3 "bs4 skip 방침" 미결 건 | 종결 — bs4 설치 확인, 현 skip 1건은 COM 게이트. 기록 정정만(F-1e) | N14 | — |
 | D-9 | E-5 서식 프로필 추출 | 보류 유지 | §9·§10 | — |
 | D-10 | COM 없는 직접 생성 백엔드(Mac·CI) | HOLD — md2hwpx 의도적 퇴역 결정 존중, Mac 경로는 kordoc(harness `_core/12`). 재개 조건: Mac 주력 전환 확정 시 스파이크부터 | 전략 | — |
+| D-11 | N15 해소·릴리스 경로 | ① spec에서 빌드 시 Tcl/Tk 9 zipfs 라이브러리를 `_tcl_data`·`_tk_data`로 추출해 번들(신규 의존성 없음) → 재빌드 → 창 감지형 기동 확인 후 릴리스(권장) / ② PyInstaller 업그레이드(패키지 설치 승인·보안 심사 필요, 현 6.20.0 훅에 zipfs 처리 없어 효과 미확인) / ③ Tcl 8.6 Python 설치 후 빌드(프로그램 설치 승인 필요) / ④ 릴리스 보류(공개 v2026.08.06 유지, E-7 미해소) | N15 | L2(재빌드)·L4(발행) |
 
 ### 11-8. 리스크·완화
 
@@ -542,7 +544,7 @@ python scripts/golden_run.py   # F-4 산출 예정
 | F-1b exe 추적 해제 | PARTIAL | 로컬 커밋 완료(`git ls-files dist` 비어 있음) — push는 최종 확인 대기 |
 | F-1d 릴리스 절차 | PASS | README.ko.md·README.md 개발자 절 |
 | F-1e 문서 점검·정정 | PASS / 갱신 보류 | §10-3 정정(N14) · `dist/` 안내 문서(05-28, txt·html·pdf 5종)는 PDF 두 모드·드래그 앤 드롭·저장 폴더 비우기·경고 대화상자 미반영 — 갱신은 사용자 확인 후 |
-| F-1a 릴리스 | 대기 | 디스크 exe blob = `c5438a8` blob(`2a61e81`) · 73,746,447 bytes · SHA-256 `9369b286f1ed9bf23fe57c1f994181522ce151068820c57f6e8888554e818824` · 내장 `anyway_to_hwpx_com.pyc`에 E-7(`HSecDef`) 포함 판독 — 발행은 최종 확인 후 |
+| F-1a 릴리스 | BLOCKED | 디스크 exe blob = `c5438a8` blob(`2a61e81`) · 73,746,447 bytes · SHA-256 `9369b286f1ed9bf23fe57c1f994181522ce151068820c57f6e8888554e818824` · 내장 `anyway_to_hwpx_com.pyc`에 E-7(`HSecDef`) 포함 판독 — 그러나 사용자 승인 후 실행한 창 감지형 기동 확인에서 60초 내 메인 창 미출현·"Unhandled exception in script" 대화상자(N15) → 발행 중단, 재개 조건 D-11 |
 
 - 공통 게이트: 단위 스위트 258 tests OK(skip 1 = COM 게이트) · `py_compile` · 실COM 변환 exit 0 · 안전 게이트 PASS · 한글 재열람·PDF 저장·1쪽 렌더 육안 확인 포함 실물 검증 11/11 PASS
 - NOT_RUN: 실COM PDF layout 통합 테스트(약 26분) — layout 경로 변경은 note 합류 1줄이며 단위 테스트(layout 경로 6건)로 확인
