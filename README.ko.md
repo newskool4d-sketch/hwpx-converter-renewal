@@ -185,7 +185,8 @@ spec은 `tkinterdnd2`의 데이터·네이티브 바이너리·hidden import를 
 
 ### 릴리스 절차
 
-1. `python -m unittest discover -s tests`·`python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py` 통과
-2. 샘플 실변환 후 `python scripts/hwpx_editor_safety_gate.py <산출물>` PASS, 한글에서 열어 여백·글꼴 육안 확인
-3. 격리 빌드(위 명령) 후 실행 파일 기동 확인 — 메인 창("HWPX 변환기") 표시와 "Unhandled exception in script" 대화상자 부재로 판정(프로세스 생존만으로 판정 금지)
-4. 실행 파일 SHA-256·크기 기록 → GitHub Release에 첨부(태그는 빌드한 커밋에). 실행 파일은 저장소에 커밋하지 않음
+1. `anyway_to_hwpx_com.py`의 `__version__`을 릴리스 태그 날짜(`YYYY.MM.DD`)로 갱신 — 릴리스 사이 개발 중에는 `+dev`
+2. `python -m unittest discover -s tests`·`python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py` 통과
+3. 샘플 실변환 후 `python scripts/hwpx_editor_safety_gate.py <산출물>` PASS, 한글에서 열어 여백·글꼴 육안 확인
+4. 격리 빌드(위 명령) 후 실행 파일 기동 확인 — 제목이 "HWPX 변환기"로 시작하는 메인 창 표시와 "Unhandled exception in script" 대화상자 부재로 판정(프로세스 생존만으로 판정 금지)
+5. 실행 파일 SHA-256·크기 기록 → GitHub Release에 첨부(태그는 빌드한 커밋에). 실행 파일은 저장소에 커밋하지 않음

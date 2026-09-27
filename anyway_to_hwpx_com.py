@@ -2,8 +2,11 @@
 HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX 변환.
 확장자를 자동 감지하여 내부 blocks 구조로 정규화한 뒤 HWP COM으로 저장.
 """
+__version__ = '2026.09.27+dev'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
+
 from pathlib import Path
 import argparse
+import contextvars
 import copy
 import csv
 import json
@@ -42,7 +45,7 @@ from hwpx_layout import (
 )
 from table_grid import SourceCell, block_rows_from_grid, expand_spanned_rows
 from table_hwpx_postprocess import apply_table_layout_profiles as _apply_table_layout_profiles_new
-from table_hwpx_styles import serialize_hwpml_part
+from table_hwpx_styles import HWPML_ROOT_NAMESPACES, serialize_hwpml_part
 from table_model import table_layout_for
 
 
@@ -193,13 +196,14 @@ def _normalize_parsed_table(header, rows):
 
 
 # 항목체계 로마숫자 최상위 레벨 허용 여부(정본 §2-1).
-# True  = 계획서·보고서 관행(Ⅰ. 최상위, 기본값)
-# False = 대외 시행문(1.이 최상위, 로마숫자 미인식)
-_ALLOW_ROMAN_LEVEL = True
+# True  = 계획서·보고서 관행(Ⅰ. 최상위, 기본값) / False = 대외 시행문(1.이 최상위, 로마숫자 미인식)
+# detect_and_parse(doc_type=…)가 변환 1건 범위로만 설정·복원한다(PDF 경로 포함, 변환 간·스레드 간 누수 없음).
+_ALLOW_ROMAN_LEVEL = contextvars.ContextVar('allow_roman_level', default=True)
+_DOC_TYPES = ('plan', 'sihaengmun')
 
 
 def _detect_list_item(line):
-    return detect_official_list_item(line, _clean_inline, allow_roman=_ALLOW_ROMAN_LEVEL)
+    return detect_official_list_item(line, _clean_inline, allow_roman=_ALLOW_ROMAN_LEVEL.get())
 
 
 _ATTACHMENT_HEAD_PATTERN = re.compile(r'^붙임\s*[::]?\s+(\S.*)$')
@@ -1632,7 +1636,17 @@ def parse_docx(docx_path):
 
 # ─── 확장자 자동 감지 ──────────────────────────────────────────────────────────
 
-def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None):
+def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None, doc_type='plan'):
+    if doc_type not in _DOC_TYPES:
+        raise ValueError(f'지원하지 않는 문서 유형: {doc_type} (지원: {", ".join(_DOC_TYPES)})')
+    token = _ALLOW_ROMAN_LEVEL.set(doc_type != 'sihaengmun')
+    try:
+        return _parse_by_extension(file_path, kordoc_home=kordoc_home, pdf_mode=pdf_mode, asset_dir=asset_dir)
+    finally:
+        _ALLOW_ROMAN_LEVEL.reset(token)
+
+
+def _parse_by_extension(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None):
     path = as_path(file_path)
     require_file(path)
     _conversion_notes.clear()
@@ -1708,7 +1722,39 @@ def _com_call(fn, retries=3, delay=1.0):
                 raise
 
 
-def create_hwp_object(visible=True):
+_SECURITY_MODULE_KEY = r'Software\HNC\HwpAutomation\Modules'
+_DEFAULT_SECURITY_MODULE = 'SecurityModule'  # 기존 관례 이름 — 레지스트리 등록 이름이 모두 실패할 때 마지막으로 시도
+_SECURITY_MODULE_WARNING = (
+    '[확인 필요] 한글 보안 모듈 등록 실패 — 저장·열기 때 한글이 파일 접근 허용을 물어 무인 실행이 멈출 수 있음 '
+    r'(HKCU\Software\HNC\HwpAutomation\Modules 등록 확인)'
+)
+
+
+def _registered_security_modules():
+    """HKCU에 등록된 한글 자동화 보안 모듈 값 이름(읽기 전용). 없거나 읽을 수 없으면 빈 목록."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _SECURITY_MODULE_KEY) as key:
+            return [winreg.EnumValue(key, index)[0] for index in range(winreg.QueryInfoKey(key)[1])]
+    except (ImportError, OSError):
+        return []
+
+
+def register_security_module(hwp):
+    """한글 자동화 보안 모듈 등록 — 레지스트리에 실제 등록된 이름을 먼저, 관례 이름을 마지막에 시도(N16).
+
+    반환: 등록에 성공한 모듈 이름. 모두 실패하면 None(파일 접근 때 한글 확인 창이 뜰 수 있음).
+    """
+    for name in dict.fromkeys(_registered_security_modules() + [_DEFAULT_SECURITY_MODULE]):
+        try:
+            if hwp.RegisterModule('FilePathCheckDLL', name):
+                return name
+        except Exception:  # noqa: BLE001 — 이름별 시도, 전부 실패하면 None으로 보고
+            continue
+    return None
+
+
+def create_hwp_object(visible=True, warn=None):
     try:
         import win32com.client
     except ImportError as exc:
@@ -1716,7 +1762,8 @@ def create_hwp_object(visible=True):
 
     try:
         hwp = win32com.client.Dispatch('HWPFrame.HwpObject')
-        hwp.RegisterModule('FilePathCheckDLL', 'SecurityModule')
+        if register_security_module(hwp) is None and warn is not None:
+            warn(_SECURITY_MODULE_WARNING)
         hwp.XHwpWindows.Item(0).Visible = visible
         return hwp
     except Exception as exc:
@@ -1725,9 +1772,12 @@ def create_hwp_object(visible=True):
 
 def _run_hwp_preflight_worker(visible=False):
     hwp = None
+    problems = []
     try:
-        hwp = create_hwp_object(visible=visible)
-        return 'HWP COM preflight OK: HWPFrame.HwpObject 생성 및 SecurityModule 등록 성공'
+        hwp = create_hwp_object(visible=visible, warn=problems.append)
+        if problems:
+            raise RuntimeError(problems[0])
+        return 'HWP COM preflight OK: HWPFrame.HwpObject 생성 및 보안 모듈 등록 성공'
     finally:
         if hwp is not None:
             try:
@@ -2571,8 +2621,9 @@ def append_end_mark_blocks(blocks):
     return blocks + [{'type': 'p', 'text': '  끝.'}]
 
 
+# 끝 온점 앞 공백은 온점이 있을 때만 소비 — '2026.3.22 행사'의 뒤 공백 보존(N17)
 _OFFICIAL_DATE_PATTERN = re.compile(
-    r'(?<![\d.])(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})\s*\.?(?!\d)'
+    r'(?<![\d.])(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})(?:\s*\.)?(?!\d)'
 )
 
 
@@ -2677,8 +2728,11 @@ _STYLE_LINT_RULES = (
 )
 
 
-def lint_official_style(blocks):
-    """정본 §1-1 공공언어 순화·병렬('및') 경고를 반환한다(비강제, 텍스트 미수정)."""
+# 표기 린트 등급: 산출물 문제([확인 필요])와 구분해 로그에만 표시, GUI '확인 필요' 집계 제외(사용자 결정 2026-09-28)
+_NOTATION_TIER = '[표기 점검]'
+
+
+def _lint_texts(blocks, include_tables=False):
     texts = []
     for blk in blocks:
         if blk.get('type') in _STYLE_TEXT_TYPES:
@@ -2686,7 +2740,15 @@ def lint_official_style(blocks):
                 texts.append(blk['text'])
             if blk.get('value'):
                 texts.append(blk['value'])
-    combined = '\n'.join(texts)
+        elif include_tables and blk.get('type') == 'table':
+            for row in ([blk.get('header') or []] + (blk.get('rows') or [])):
+                texts.extend(str(cell) for cell in row if cell)
+    return texts
+
+
+def lint_official_style(blocks):
+    """정본 §1-1 공공언어 순화·병렬('및') 경고를 반환한다(비강제, 텍스트 미수정)."""
+    combined = '\n'.join(_lint_texts(blocks))
     notes = []
     for avoid, prefer, exclude in _STYLE_LINT_RULES:
         if exclude:
@@ -2695,9 +2757,9 @@ def lint_official_style(blocks):
         else:
             found = avoid in combined
         if found:
-            notes.append(f"[확인 필요] 공공언어 순화: '{avoid}' → '{prefer}' 권장 (정본 §1-1)")
+            notes.append(f"{_NOTATION_TIER} 공공언어 순화: '{avoid}' → '{prefer}' 권장 (정본 §1-1)")
     if '및' in combined:
-        notes.append("[확인 필요] '및' 사용 — '와/과/·'로 병렬관계 명확화 검토 (정본 §1-1)")
+        notes.append(f"{_NOTATION_TIER} '및' 사용 — '와/과/·'로 병렬관계 명확화 검토 (정본 §1-1)")
     return notes
 
 
@@ -2711,20 +2773,86 @@ def lint_money_notation(blocks):
     금액은 '천원'으로 줄이지 않고 아라비아 숫자로 적는다(예: 345,000원).
     예산액은 대부분 표 안에 나오므로 lint_official_style과 달리 표 셀까지 스캔한다.
     """
-    texts = []
-    for blk in blocks:
-        if blk.get('type') in _STYLE_TEXT_TYPES:
-            if blk.get('text'):
-                texts.append(blk['text'])
-            if blk.get('value'):
-                texts.append(blk['value'])
-        elif blk.get('type') == 'table':
-            for row in ([blk.get('header') or []] + (blk.get('rows') or [])):
-                texts.extend(str(cell) for cell in row if cell)
-    combined = '\n'.join(texts)
+    combined = '\n'.join(_lint_texts(blocks, include_tables=True))
     if _CHEONWON_PATTERN.search(combined):
-        return ["[확인 필요] 금액 표기: '천원' 축약 대신 아라비아 숫자로 (예: 345,000원) (정본 §1-2)"]
+        return [f"{_NOTATION_TIER} 금액 표기: '천원' 축약 대신 아라비아 숫자로 (예: 345,000원) (정본 §1-2)"]
     return []
+
+
+# '오후 3시 20분'·'14시 30분'·'오전 9시' — '2시간'(기간)은 제외. 정본 §1-2: 24시각제·시분 글자 생략·쌍점
+_TIME_EXPR_PATTERN = re.compile(r'(?:(오전|오후)\s*)?(?<!\d)(\d{1,2})\s*시(?!간)(?:\s*(\d{1,2})\s*분)?')
+
+
+def _suggest_24h(match):
+    meridiem, hour, minute = match.group(1), int(match.group(2)), int(match.group(3) or 0)
+    if meridiem == '오후' and hour < 12:
+        hour += 12
+    elif meridiem == '오전' and hour == 12:
+        hour = 0
+    return f'{hour}:{minute:02d}'
+
+
+def lint_official_time(blocks):
+    """정본 §1-2 시간 표기(24시각제·쌍점) 경고를 1건으로 요약해 반환한다(비강제, 텍스트 미수정)."""
+    hits = [
+        match
+        for text in _lint_texts(blocks, include_tables=True)
+        for match in _TIME_EXPR_PATTERN.finditer(text)
+        if int(match.group(2)) <= 24
+    ]
+    if not hits:
+        return []
+    first = hits[0]
+    more = ' 등' if len(hits) > 1 else ''
+    return [
+        f"{_NOTATION_TIER} 시간 표기 {len(hits)}건: '{first.group(0).strip()}' → '{_suggest_24h(first)}'{more}"
+        " — 24시각제·쌍점 표기 권장 (정본 §1-2)"
+    ]
+
+
+# ─── 산출물 자가검증 (변환 직후, 표준 라이브러리) ────────────────────────────────
+
+_SECTION_PART_RE = re.compile(r'Contents/section\d+\.xml')
+_ROOT_OPEN_TAG_RE = re.compile(rb'<(?![?!])[^>]*>')
+
+
+def self_check_hwpx(hwpx_path):
+    """변환 직후 산출물의 구조 이상을 [확인 필요] note 목록으로 반환한다.
+
+    ZIP·mimetype·XML 파싱·루트 선언(정품 한컴 15종)·표 rowCnt/colCnt만 가볍게 본다.
+    편집기 안전성 게이트(scripts/hwpx_editor_safety_gate.py)를 대체하지 않는다.
+    """
+    problems = []
+    try:
+        package = zipfile.ZipFile(hwpx_path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        return [f'[확인 필요] 산출물 자가검증: HWPX(ZIP)를 열 수 없음 — {exc}']
+    with package:
+        entries = package.infolist()
+        if not entries or entries[0].filename != 'mimetype' or entries[0].compress_type != zipfile.ZIP_STORED:
+            problems.append('mimetype이 첫 엔트리·무압축이 아님')
+        for entry in entries:
+            if not entry.filename.endswith(('.xml', '.hpf')):
+                continue
+            data = package.read(entry.filename)
+            try:
+                root = ET.fromstring(data)
+            except ET.ParseError as exc:
+                problems.append(f'{entry.filename} XML 파싱 실패({exc})')
+                continue
+            is_section = bool(_SECTION_PART_RE.fullmatch(entry.filename))
+            if is_section or entry.filename == 'Contents/header.xml':
+                open_tag = _ROOT_OPEN_TAG_RE.search(data)
+                declared = open_tag.group(0) if open_tag else b''
+                missing = [prefix for prefix in HWPML_ROOT_NAMESPACES if f'xmlns:{prefix}="'.encode() not in declared]
+                if missing:
+                    more = '…' if len(missing) > 3 else ''
+                    problems.append(f'{entry.filename} 루트 네임스페이스 {len(missing)}종 누락({", ".join(missing[:3])}{more})')
+            if is_section and any(
+                not tbl.get('rowCnt') or not tbl.get('colCnt') for tbl in root.iter(f'{{{_NS_HP}}}tbl')
+            ):
+                problems.append(f'{entry.filename} 표 rowCnt/colCnt 누락')
+    return [f'[확인 필요] 산출물 자가검증: {problem}' for problem in problems]
 
 
 # ─── 변환 실행 ─────────────────────────────────────────────────────────────────
@@ -2847,6 +2975,8 @@ def convert_file(
     kordoc_home=None,
     diagnose_stage: DiagnoseStageReporter | None = None,
     pdf_mode='layout',
+    doc_type='plan',
+    official=False,
 ):
     src = as_path(src_path)
     out = as_path(hwpx_path)
@@ -2859,12 +2989,15 @@ def convert_file(
         rendered_layout = isinstance(parsed, RenderedPdfLayout)
         notes = pop_conversion_notes()
         blocks = parsed
-        if not rendered_layout and insert_end_mark:
+        # 공문 표기 정규화는 --official 단독으로도, --insert-end-mark(현행 의미: 정규화 포함)로도 켜진다
+        if not rendered_layout and (official or insert_end_mark):
             blocks = normalize_official_dates(blocks)
             blocks = normalize_official_amounts(blocks)
             notes.extend(lint_official_style(blocks))
             notes.extend(lint_money_notation(blocks))
-            blocks = append_end_mark_blocks(blocks)
+            notes.extend(lint_official_time(blocks))
+            if insert_end_mark:
+                blocks = append_end_mark_blocks(blocks)
         table_layouts = [
             {
                 'header': blk.get('header') or [],
@@ -2914,6 +3047,7 @@ def convert_file(
             time.sleep(0.3)
         if rendered_layout:
             notes.extend(pop_conversion_notes())
+            notes.extend(self_check_hwpx(out))
             return {'notes': notes}
         if diagnose_stage:
             diagnose_stage('postprocess')
@@ -2924,6 +3058,7 @@ def convert_file(
         apply_official_line_spacing(out)
         apply_official_paragraph_spacing(out)
         notes.extend(pop_conversion_notes())  # 빌드·후처리 단계 note 합류
+        notes.extend(self_check_hwpx(out))
         if diagnose_stage:
             diagnose_stage('finalize')
         return {'notes': notes}
@@ -2936,6 +3071,7 @@ def convert_file(
                 kordoc_home=kordoc_home,
                 pdf_mode=selected_pdf_mode.value,
                 asset_dir=Path(temp_dir),
+                doc_type=doc_type,
             )
             result = convert_loaded(parsed)
     else:
@@ -2943,6 +3079,7 @@ def convert_file(
             src,
             kordoc_home=kordoc_home,
             pdf_mode=selected_pdf_mode.value,
+            doc_type=doc_type,
         )
         result = convert_loaded(parsed)
     ext = src.suffix.upper().lstrip('.')
@@ -2955,10 +3092,15 @@ def main(argv=None):
         description='Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX 변환 (HWP COM 방식)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     parser.add_argument('files', nargs='*', help='변환할 파일 경로')
     parser.add_argument('-o', '--output-dir', default=None, help='저장할 폴더 경로 (기본: 입력 파일과 같은 폴더)')
     parser.add_argument('--empty-output-folder', action='store_true', help='변환 전 앱 manifest가 관리하는 출력 폴더 파일만 비움')
-    parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입")
+    parser.add_argument('--insert-end-mark', action='store_true', help="문서 끝에 '끝' 표시를 자동 삽입 (공문 표기 정규화 포함)")
+    parser.add_argument(
+        '--official', action='store_true',
+        help="공문 표기 정규화(날짜·금액)와 표기 점검만 적용 — '끝' 표시 없음 (--insert-end-mark는 이를 포함)",
+    )
     parser.add_argument(
         '--doc-type', choices=['plan', 'sihaengmun'], default='plan',
         help='항목체계 최상위 레벨: plan=Ⅰ.(계획서·보고서, 기본) / sihaengmun=1.(대외 시행문, 로마숫자 미사용)',
@@ -3001,16 +3143,13 @@ def main(argv=None):
     if args.empty_output_folder and not args.output_dir:
         parser.error('--empty-output-folder는 -o/--output-dir와 함께 사용해야 함')
 
-    global _ALLOW_ROMAN_LEVEL
-    _ALLOW_ROMAN_LEVEL = (args.doc_type != 'sihaengmun')  # 정본 §2-1 항목체계 최상위 레벨
-
     hwp = None
     failures = []
     try:
         prepared_output_dir = prepare_output_dir(args.output_dir, args.empty_output_folder) if args.output_dir else None
         print('HWP 실행 중...')
         try:
-            hwp = create_hwp_object(visible=True)
+            hwp = create_hwp_object(visible=True, warn=lambda message: print(f'  {message}', file=sys.stderr))
         except Exception as exc:
             print(f'[FAIL] {exc}', file=sys.stderr)
             return 2
@@ -3034,6 +3173,8 @@ def main(argv=None):
                     kordoc_home=args.kordoc_home,
                     diagnose_stage=diagnose_stage,
                     pdf_mode=args.pdf_mode,
+                    doc_type=args.doc_type,
+                    official=args.official,
                 )
                 for note in (result or {}).get('notes', []):
                     print(f'  {note}', file=sys.stderr)

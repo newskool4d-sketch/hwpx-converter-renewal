@@ -26,6 +26,8 @@ def note_log_tag(note: str) -> str:
         return "err"
     if note.startswith("[경고]"):
         return "warn"
+    if note.startswith("[표기 점검]"):
+        return "info"
     return "muted"
 
 
@@ -36,6 +38,8 @@ class ConversionSnapshot:
     empty_output_folder: bool
     insert_end_mark: bool
     pdf_mode: str
+    official: bool = False
+    doc_type: str = "plan"
 
 
 def run_conversion(snapshot: ConversionSnapshot, message_sink: MessageSink) -> None:
@@ -50,7 +54,9 @@ def run_conversion(snapshot: ConversionSnapshot, message_sink: MessageSink) -> N
             snapshot.output_dir,
             empty_output_folder=snapshot.empty_output_folder,
         )
-        hwp = converter.create_hwp_object(visible=True)
+        hwp = converter.create_hwp_object(
+            visible=True, warn=lambda message: message_sink(("log", message, note_log_tag(message)))
+        )
         time.sleep(1.5)
 
         for src in snapshot.files:
@@ -66,6 +72,8 @@ def run_conversion(snapshot: ConversionSnapshot, message_sink: MessageSink) -> N
                     insert_end_mark=snapshot.insert_end_mark,
                     kordoc_home=None,
                     pdf_mode=snapshot.pdf_mode,
+                    official=snapshot.official,
+                    doc_type=snapshot.doc_type,
                 )
                 converter.record_output_file(prepared_output_dir, out_path)
                 completed += 1

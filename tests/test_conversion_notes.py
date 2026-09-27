@@ -2,10 +2,13 @@ import contextlib
 import io
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import anyway_to_hwpx_com as converter
+from table_hwpx_styles import HWPML_ROOT_NAMESPACES
 
 
 class _FakeDocument:
@@ -169,6 +172,204 @@ class TableColWidthNoteTests(unittest.TestCase):
         notes = converter.pop_conversion_notes()
 
         self.assertIn("[경고] 열 너비 조정 실패: COM 오류", notes)
+
+
+class OfficialNormalizationTests(unittest.TestCase):
+    """공문 정규화(날짜·금액·표기 점검)와 '끝' 표시의 분리 — build_doc에 전달되는 blocks로 판정."""
+
+    def setUp(self):
+        converter.pop_conversion_notes()
+
+    def _captured_blocks(self, **kwargs):
+        captured = []
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "s.md"
+            source.write_text("2026.3.22 행사\n\n강사료 400,000원", encoding="utf-8")
+            with (
+                patch.object(converter, "build_doc", side_effect=lambda _hwp, blocks: captured.append(blocks)),
+                patch.object(converter.time, "sleep", return_value=None),
+            ):
+                result = converter.convert_file(_FakeHwp(), source, Path(tmp) / "s.hwpx", **kwargs)
+        return captured[0], result["notes"]
+
+    # 특성화: --insert-end-mark 현행 의미(정규화 + '끝') 고정. 날짜 뒤 공백은 N17 수정(사용자 결정 2026-09-28)으로 보존
+    def test_insert_end_mark_keeps_current_normalization_and_end_mark(self):
+        blocks, _ = self._captured_blocks(insert_end_mark=True)
+        self.assertEqual(blocks, [
+            {"type": "p", "text": "2026. 3. 22. 행사"},
+            {"type": "p", "text": "강사료 금400,000원(금사십만원)  끝."},
+        ])
+
+    def test_official_normalizes_without_end_mark(self):
+        blocks, _ = self._captured_blocks(official=True)
+        self.assertEqual(blocks, [
+            {"type": "p", "text": "2026. 3. 22. 행사"},
+            {"type": "p", "text": "강사료 금400,000원(금사십만원)"},
+        ])
+
+    def test_date_normalization_keeps_following_space(self):  # N17
+        blocks = converter.normalize_official_dates([{"type": "p", "text": "2026.3.22 행사, 2026.3.23. 마감"}])
+        self.assertEqual(blocks[0]["text"], "2026. 3. 22. 행사, 2026. 3. 23. 마감")
+
+    def test_default_leaves_text_untouched(self):
+        blocks, _ = self._captured_blocks()
+        self.assertEqual(blocks, [{"type": "p", "text": "2026.3.22 행사"}, {"type": "p", "text": "강사료 400,000원"}])
+
+    def test_cli_official_and_doc_type_reach_convert_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "s.md"
+            source.write_text("본문", encoding="utf-8")
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                patch.object(converter, "create_hwp_object", return_value=_FakeHwp()),
+                patch.object(converter, "convert_file", return_value={"notes": []}) as convert,
+                patch.object(converter.time, "sleep", return_value=None),
+            ):
+                exit_code = converter.main([str(source), "-o", tmp, "--official", "--doc-type", "sihaengmun"])
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(convert.call_args.kwargs["official"])
+        self.assertEqual(convert.call_args.kwargs["doc_type"], "sihaengmun")
+
+
+def _package(path, *, mimetype_first=True, broken_section=False, drop_rowcnt=False, bare_header=False):
+    ns = " ".join(f'xmlns:{p}="{u}"' for p, u in HWPML_ROOT_NAMESPACES.items())
+    decl = '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'
+    tbl = '<hp:tbl colCnt="1"/>' if drop_rowcnt else '<hp:tbl rowCnt="1" colCnt="1"/>'
+    section = f"{decl}<hs:sec {ns}><hp:p>{tbl}</hp:p></hs:sec>"
+    if broken_section:
+        section = section.replace("</hs:sec>", "")
+    header_ns = f'xmlns:hh="{HWPML_ROOT_NAMESPACES["hh"]}"' if bare_header else ns
+    header = f"{decl}<hh:head {header_ns}/>"
+    entries = [
+        ("mimetype", "application/hwp+zip", zipfile.ZIP_STORED),
+        ("Contents/header.xml", header, zipfile.ZIP_DEFLATED),
+        ("Contents/section0.xml", section, zipfile.ZIP_DEFLATED),
+    ]
+    if not mimetype_first:
+        entries.append(entries.pop(0))
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, text, method in entries:
+            zf.writestr(zipfile.ZipInfo(name), text, compress_type=method)
+
+
+class SelfCheckTests(unittest.TestCase):
+    def _check(self, **kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.hwpx"
+            _package(path, **kwargs)
+            return converter.self_check_hwpx(path)
+
+    def _assert_flagged(self, notes, needle):
+        self.assertTrue(notes, "자가검증이 문제를 보고해야 함")
+        self.assertTrue(all(n.startswith("[확인 필요] 산출물 자가검증") for n in notes), notes)
+        self.assertTrue(any(needle in n for n in notes), notes)
+
+    def test_clean_package_has_no_findings(self):
+        self.assertEqual(self._check(), [])
+
+    def test_mimetype_must_be_first_and_stored(self):
+        self._assert_flagged(self._check(mimetype_first=False), "mimetype")
+
+    def test_broken_xml_is_reported(self):
+        self._assert_flagged(self._check(broken_section=True), "section0.xml")
+
+    def test_table_without_rowcnt_is_reported(self):
+        self._assert_flagged(self._check(drop_rowcnt=True), "rowCnt")
+
+    def test_missing_root_namespaces_are_reported(self):
+        self._assert_flagged(self._check(bare_header=True), "네임스페이스")
+
+    def test_non_zip_output_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.hwpx"
+            path.write_bytes(b"saved")
+            self._assert_flagged(converter.self_check_hwpx(path), "ZIP")
+
+    def test_convert_file_appends_self_check_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "s.md"
+            source.write_text("본문", encoding="utf-8")
+            with (
+                patch.object(converter, "build_doc", return_value=None),
+                patch.object(converter.time, "sleep", return_value=None),
+            ):
+                result = converter.convert_file(_FakeHwp(), source, Path(tmp) / "s.hwpx")
+        self.assertTrue(any(n.startswith("[확인 필요] 산출물 자가검증") for n in result["notes"]), result["notes"])
+
+
+class _RegisteringHwp:
+    """RegisterModule 호출을 기록하고 허용된 이름에만 True를 돌려주는 COM 대역."""
+
+    def __init__(self, accepted=()):
+        self.accepted = set(accepted)
+        self.register_calls = []
+        self.XHwpWindows = SimpleNamespace(Item=lambda _index: SimpleNamespace(Visible=None))
+
+    def RegisterModule(self, module_type, module_name):
+        self.register_calls.append((module_type, module_name))
+        return module_name in self.accepted
+
+    def Quit(self):
+        return None
+
+
+class SecurityModuleRegistrationTests(unittest.TestCase):
+    """N16: 레지스트리에 실제 등록된 이름으로 보안 모듈을 등록하고, 실패를 숨기지 않는다."""
+
+    def test_registers_name_found_in_registry_first(self):
+        hwp = _RegisteringHwp(accepted={"FilePathCheckerModule"})
+        with patch.object(converter, "_registered_security_modules", return_value=["FilePathCheckerModule"]):
+            self.assertEqual(converter.register_security_module(hwp), "FilePathCheckerModule")
+        self.assertEqual(hwp.register_calls[0], ("FilePathCheckDLL", "FilePathCheckerModule"))
+
+    def test_falls_back_to_conventional_name(self):
+        hwp = _RegisteringHwp(accepted={"SecurityModule"})
+        with patch.object(converter, "_registered_security_modules", return_value=[]):
+            self.assertEqual(converter.register_security_module(hwp), "SecurityModule")
+
+    def test_returns_none_when_every_attempt_fails(self):
+        hwp = _RegisteringHwp()
+        with patch.object(converter, "_registered_security_modules", return_value=["FilePathCheckerModule"]):
+            self.assertIsNone(converter.register_security_module(hwp))
+        self.assertEqual([call[1] for call in hwp.register_calls], ["FilePathCheckerModule", "SecurityModule"])
+
+    def test_create_hwp_object_warns_when_registration_fails(self):
+        warnings = []
+        with (
+            patch("win32com.client.Dispatch", return_value=_RegisteringHwp()),
+            patch.object(converter, "_registered_security_modules", return_value=[]),
+        ):
+            converter.create_hwp_object(visible=False, warn=warnings.append)
+        self.assertEqual(len(warnings), 1)
+        self.assertTrue(warnings[0].startswith("[확인 필요] 한글 보안 모듈 등록 실패"), warnings)
+
+    def test_preflight_fails_honestly_when_registration_fails(self):
+        with (
+            patch("win32com.client.Dispatch", return_value=_RegisteringHwp()),
+            patch.object(converter, "_registered_security_modules", return_value=[]),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                converter._run_hwp_preflight_worker()
+        self.assertIn("보안 모듈 등록 실패", str(raised.exception))
+
+    def test_preflight_succeeds_only_after_real_registration(self):
+        with (
+            patch("win32com.client.Dispatch", return_value=_RegisteringHwp(accepted={"FilePathCheckerModule"})),
+            patch.object(converter, "_registered_security_modules", return_value=["FilePathCheckerModule"]),
+        ):
+            self.assertIn("preflight OK", converter._run_hwp_preflight_worker())
+
+
+class VersionTests(unittest.TestCase):
+    def test_version_string_follows_release_date_scheme(self):
+        self.assertRegex(converter.__version__, r"^\d{4}\.\d{2}\.\d{2}(\+dev)?$")
+
+    def test_cli_version_prints_version_and_exits_zero(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as raised:
+            converter.main(["--version"])
+        self.assertEqual(raised.exception.code, 0)
+        self.assertIn(converter.__version__, output.getvalue())
 
 
 class MarkdownMediaTests(unittest.TestCase):

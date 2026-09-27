@@ -172,11 +172,26 @@ def build_ui(app) -> None:
     )
     app.empty_output_check.pack(side=tk.LEFT, padx=(0, 18))
     app.insert_end_check = ttk.Checkbutton(
-        opts, text="문서 끝에 '끝' 자동 삽입 (공문서)", variable=app.insert_end_mark
+        opts, text="문서 끝에 '끝' 자동 삽입 (정규화 포함)", variable=app.insert_end_mark
     )
     app.insert_end_check.pack(side=tk.LEFT)
+    doc_frame = tk.Frame(out_card, bg=CARD)
+    doc_frame.grid(row=3, column=0, columnspan=3, sticky="ew", padx=14, pady=(0, 12))
+    tk.Label(doc_frame, text="문서 유형", bg=CARD, fg=MUTED, font=FONT_SMALL).pack(side=tk.LEFT)
+    app.doc_plan_radio = ttk.Radiobutton(
+        doc_frame, text="계획·보고(Ⅰ.부터)", value="plan", variable=app.doc_type
+    )
+    app.doc_plan_radio.pack(side=tk.LEFT, padx=(12, 8))
+    app.doc_sihaengmun_radio = ttk.Radiobutton(
+        doc_frame, text="시행문(1.부터)", value="sihaengmun", variable=app.doc_type
+    )
+    app.doc_sihaengmun_radio.pack(side=tk.LEFT)
+    app.official_check = ttk.Checkbutton(
+        doc_frame, text="공문 표기 정규화(날짜·금액·표기 점검)", variable=app.official
+    )
+    app.official_check.pack(side=tk.LEFT, padx=(18, 0))
     pdf_frame = tk.Frame(out_card, bg=CARD)
-    pdf_frame.grid(row=3, column=0, columnspan=3, sticky="ew", padx=14, pady=(0, 12))
+    pdf_frame.grid(row=4, column=0, columnspan=3, sticky="ew", padx=14, pady=(0, 12))
     tk.Label(pdf_frame, text="PDF 방식", bg=CARD, fg=MUTED, font=FONT_SMALL).pack(side=tk.LEFT)
     app.pdf_layout_radio = ttk.Radiobutton(
         pdf_frame, text="레이아웃 보존(기본)", value="layout", variable=app.pdf_mode

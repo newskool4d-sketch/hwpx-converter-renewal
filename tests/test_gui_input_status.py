@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import patch
 
+import gui_conversion_worker as worker
 import gui_input_status
 from gui_conversion_worker import note_log_tag
 from gui_file_intake import add_input_paths
@@ -54,6 +55,11 @@ class _Progress:
         self.config = kwargs
 
 
+class _QuitOnlyHwp:
+    def Quit(self):
+        return None
+
+
 class _FinishApp(_App):
     def __init__(self) -> None:
         super().__init__()
@@ -69,7 +75,50 @@ class FinishConversionTests(unittest.TestCase):
     def test_note_tags_follow_prefix_severity(self) -> None:
         self.assertEqual(note_log_tag("[확인 필요] Markdown 이미지 1개 미삽입"), "err")
         self.assertEqual(note_log_tag("[경고] 줄 간격 후처리 실패: x"), "warn")
+        self.assertEqual(note_log_tag("[표기 점검] '및' 사용"), "info")
         self.assertEqual(note_log_tag("[참고] 표 열 너비"), "muted")
+
+    def test_notation_notes_do_not_mark_file_as_warned(self) -> None:
+        messages = []
+        snapshot = worker.ConversionSnapshot(
+            files=("a.md",), output_dir="out", empty_output_folder=False, insert_end_mark=True, pdf_mode="layout"
+        )
+        with (
+            patch.object(worker.pythoncom, "CoInitialize"),
+            patch.object(worker.pythoncom, "CoUninitialize"),
+            patch.object(worker.time, "sleep"),
+            patch.object(worker.converter, "prepare_output_dir", return_value=Path("out")),
+            patch.object(worker.converter, "create_hwp_object", return_value=_QuitOnlyHwp()),
+            patch.object(worker.converter, "as_path", return_value=Path("a.md")),
+            patch.object(worker.converter, "build_output_path", return_value=Path("out/a.hwpx")),
+            patch.object(worker.converter, "convert_file", return_value={"notes": ["[표기 점검] '및' 사용"]}),
+            patch.object(worker.converter, "record_output_file"),
+        ):
+            worker.run_conversion(snapshot, messages.append)
+        self.assertEqual(messages[-1], ("done", 1, [], []))
+        self.assertIn(("log", "[표기 점검] '및' 사용", "info"), messages)
+
+    def test_security_module_warning_reaches_log(self) -> None:  # N16
+        warning = "[확인 필요] 한글 보안 모듈 등록 실패 — 테스트"
+
+        def fake_create(visible=True, warn=None):
+            if warn is not None:
+                warn(warning)
+            return _QuitOnlyHwp()
+
+        messages = []
+        snapshot = worker.ConversionSnapshot(
+            files=(), output_dir="out", empty_output_folder=False, insert_end_mark=False, pdf_mode="layout"
+        )
+        with (
+            patch.object(worker.pythoncom, "CoInitialize"),
+            patch.object(worker.pythoncom, "CoUninitialize"),
+            patch.object(worker.time, "sleep"),
+            patch.object(worker.converter, "prepare_output_dir", return_value=Path("out")),
+            patch.object(worker.converter, "create_hwp_object", side_effect=fake_create),
+        ):
+            worker.run_conversion(snapshot, messages.append)
+        self.assertIn(("log", warning, "err"), messages)
 
     def test_warned_files_produce_warning_summary_instead_of_plain_success(self) -> None:
         app = _FinishApp()

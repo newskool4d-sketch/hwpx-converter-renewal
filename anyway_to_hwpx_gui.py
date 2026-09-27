@@ -44,9 +44,9 @@ from gui_theme import (
 class ConverterApp(BaseTk):
     def __init__(self, *, capabilities: RuntimeCapabilities | None = None):
         super().__init__()
-        self.title("HWPX 변환기")
+        self.title(f"HWPX 변환기 {converter.__version__}")
         self.geometry("800x680")
-        self.minsize(700, 560)
+        self.minsize(700, 600)  # 문서 유형 행(웨이브 2) 추가분만큼 높여 최소 크기에서도 파일 목록 공간 유지
         self.configure(bg=BG)
 
         self.files = []
@@ -60,6 +60,8 @@ class ConverterApp(BaseTk):
         self.empty_output_folder = tk.BooleanVar(value=False)
         self.insert_end_mark = tk.BooleanVar(value=False)
         self.pdf_mode = tk.StringVar(value="layout")
+        self.official = tk.BooleanVar(value=False)
+        self.doc_type = tk.StringVar(value="plan")
         self.status = tk.StringVar(value="파일을 선택하세요.")
         self.count_text = tk.StringVar(value="0개")
         self.messages = queue.Queue()
@@ -104,6 +106,9 @@ class ConverterApp(BaseTk):
             self.output_browse_button,
             self.empty_output_check,
             self.insert_end_check,
+            self.official_check,
+            self.doc_plan_radio,
+            self.doc_sihaengmun_radio,
             self.convert_button,
         ):
             control.configure(state=state)
@@ -206,24 +211,30 @@ class ConverterApp(BaseTk):
         empty_output_folder = bool(self.empty_output_folder.get())
         insert_end_mark = bool(self.insert_end_mark.get())
         pdf_mode = self.pdf_mode.get()
+        official = bool(self.official.get())
+        doc_type = self.doc_type.get()
         self._set_busy(True)
         self.progress.configure(maximum=len(files), value=0)
         self.status.set("HWP 실행 중...")
         self._append_log("HWP 실행 중...", "muted")
         self.worker = threading.Thread(
             target=self._convert_worker,
-            args=(files, output_dir, empty_output_folder, insert_end_mark, pdf_mode),
+            args=(files, output_dir, empty_output_folder, insert_end_mark, pdf_mode, official, doc_type),
             daemon=True,
         )
         self.worker.start()
 
-    def _convert_worker(self, files, output_dir, empty_output_folder, insert_end_mark, pdf_mode):
+    def _convert_worker(
+        self, files, output_dir, empty_output_folder, insert_end_mark, pdf_mode, official=False, doc_type="plan"
+    ):
         snapshot = ConversionSnapshot(
             files=tuple(files),
             output_dir=output_dir,
             empty_output_folder=empty_output_folder,
             insert_end_mark=insert_end_mark,
             pdf_mode=pdf_mode,
+            official=official,
+            doc_type=doc_type,
         )
         run_conversion(snapshot, self.messages.put)
 
