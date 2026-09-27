@@ -61,11 +61,43 @@ _tkdnd_datas = collect_data_files("tkinterdnd2")
 _tkdnd_binaries = collect_dynamic_libs("tkinterdnd2")
 _tkdnd_hiddenimports = collect_submodules("tkinterdnd2")
 
+
+# Tcl/Tk 9(CPython 3.14.7+ Windows)은 라이브러리를 DLL 내장 zipfs(//zipfs:/lib/...)에 두어
+# PyInstaller 6.20 훅이 _tcl_data/_tk_data를 수집하지 못하고, 런타임 훅은 두 폴더가 없으면
+# 시작 시 FileNotFoundError로 종료한다(IMPROVEMENT_PLAN N15). 빌드 시 zipfs 내용을 workpath에
+# 복사해 같은 이름으로 번들한다. 라이브러리가 일반 폴더(Tcl 8.6 등)면 아무것도 하지 않는다.
+def _tcl_tk_zipfs_datas():
+    import shutil
+    import tkinter
+
+    probe = tkinter.Tk()
+    probe.withdraw()
+    try:
+        libraries = {'_tcl_data': probe.eval('info library'), '_tk_data': probe.eval('set tk_library')}
+        if not all(path.startswith('//zipfs:') for path in libraries.values()):
+            return []
+        out_root = os.path.join(workpath, 'tcl_tk_zipfs')
+        shutil.rmtree(out_root, ignore_errors=True)
+        os.makedirs(out_root)
+        datas = []
+        for dest, source in libraries.items():
+            target = os.path.join(out_root, dest)
+            probe.eval('file copy {%s} {%s}' % (source, target.replace('\\', '/')))
+            for folder, _dirs, files in os.walk(target):
+                rel = os.path.relpath(folder, out_root)
+                datas += [(os.path.join(folder, name), rel) for name in files]
+        return datas
+    finally:
+        probe.destroy()
+
+
+_tcl_tk_datas = _tcl_tk_zipfs_datas()
+
 a = Analysis(
     ['anyway_to_hwpx_gui.py'],
     pathex=[],
     binaries=_tkdnd_binaries,
-    datas=_odl_datas + _tkdnd_datas,
+    datas=_odl_datas + _tkdnd_datas + _tcl_tk_datas,
     hiddenimports=pdf_text_imports + odl_imports + _tkdnd_hiddenimports,
     hookspath=[],
     hooksconfig={},

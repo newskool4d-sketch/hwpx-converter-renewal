@@ -195,3 +195,12 @@
 - 이력 판독(실행 없음, 임시 파일 자동 삭제): `83103a7`·`ef4229f`·`4b6c5ae`·`8812a11`·`c6e91df` = `tcl86t.dll`·`tk86t.dll` + `_tcl_data` 832개·`_tk_data` 89개 / `c5438a8` = `tcl90.dll`·`tcl9tk90.dll` + 0·0개.
 - 빌드 환경: Python 3.14.7, Tcl/Tk 9.0.4, `info library` = `//zipfs:/lib/tcl/tcl_library`(DLL 내장), `base_prefix\tcl` 없음, PyInstaller 6.20.0 `tcl_tk` 훅에 zipfs 처리 없음, 설치 Python 1개.
 - 결론: 08-06 이후 Python 업데이트로 Tcl 9가 되면서 이 환경의 모든 onefile 빌드가 기동 불가. 2026-08-26 E-1 "5초 기동 smoke 통과"는 오류 대화상자가 떠 있는 동안의 프로세스 생존을 본 거짓 통과로 판단. 공개 `v2026.08.06`(`c6e91df`, Tcl 8.6)은 영향 없음.
+
+### D-11 ① 시험 작업 — Tcl/Tk 9 zipfs 라이브러리 번들 (PASS)
+
+- 확인: 런타임 훅 `pyi_rth__tkinter`는 `_tcl_data`·`_tk_data` 둘 다 요구, 빌드 훅은 `info library`가 `//zipfs:` 경로라 수집 생략. zipfs 실측 — Tcl `//zipfs:/lib/tcl/tcl_library`(tcl90.dll, 869항목), Tk `//zipfs:/lib/tk/tk_library`(tcl9tk90.dll, 94항목, Tk 로드 후 마운트).
+- 수정(브랜치 `spike/tcl9-bundle`): `anyway_to_hwpx_gui.spec`의 `_tcl_tk_zipfs_datas()` — 숨김 Tk로 두 경로를 조회해 모두 zipfs일 때만 `workpath/tcl_tk_zipfs`에 `file copy` 후 `_tcl_data`·`_tk_data`로 datas 추가.
+- 빌드: `HWPX_GUI_PDF_STACK=full python -m PyInstaller --clean --noconfirm --distpath C:/tmp/hwpx-gui-tcl9-spike/dist --workpath C:/tmp/hwpx-gui-tcl9-spike/work anyway_to_hwpx_gui.spec` → exit 0, 75,106,019 bytes, SHA-256 `53ebe0775ab0e6b005b7fc274f9dda0355779ebda8b488405af0d2d71809b528`. UPX 실패 3건(arm64 tkdnd DLL CantPack, `_uuid.pyd`·`python3.dll` NotCompressible)은 비압축 포함.
+- 판독: `_tcl_data` 839·`_tk_data` 90개, `init.tcl`·`tk.tcl`·`encoding` 83개. 내장 `anyway_to_hwpx_com.pyc`에 `HSecDef`(E-7)·웨이브 1 문구 존재, 구 문구 부재.
+- 기동 확인(창 감지형) 2회: 메인 창 `TkTopLevel` "HWPX 변환기" 12.4s·25.6s 출현, `#32770` 없음, `WM_CLOSE` exit 0, 잔여 프로세스 없음. onefile 기동 시간 12~26s 관찰.
+- 미실행: 동결 exe로 실제 GUI 변환 1건(스파이크 합격 기준 밖) — 발행 전 권장.
