@@ -224,3 +224,17 @@
 - `gh release create v2026.09.27 <C:/tmp/hwpx-gui-tcl9-spike/dist 자산> --target 768e275… --title "Anyway to HWPX GUI (2026-09-27)" --notes-file tests/out/track-f/release_notes_v2.md --latest`.
 - 사후: API 자산 `digest` = `sha256:53ebe077…b528`(로컬 일치), size 75,106,019, state uploaded / 태그 → `768e275` / 목록상 Latest / `19806ca`(E-7) 조상 확인 / `git ls-files dist` 비어 있음.
 - 로컬 `dist/anyway_to_hwpx_gui.exe`는 사용자 승인으로 같은 빌드로 교체(해시 사전 대조, ignored).
+
+### 웨이브 2 실COM 검증 (2026-09-28, 워크트리 `C:\tmp\hwpx-wave2`, 브랜치 `feature/track-f-wave2`)
+
+- 1차 BLOCKED: `w2_sihaengmun.md` 변환이 한글 파일 접근 확인 창에서 대기 → `SaveAs` 실패, 같은 시점 다른 자동화 클라이언트의 한글 사용 확인(N18) → 중지, 다른 창 미조작. 1차 잔여 `tests/out/track-f/w2/w2_official.hwpx`는 판정에 미사용.
+- 등록 이름 프로브(`tests/out/track-f/w2/probe_register.py`, 사용자 결정): 시작 전 `Hwp.exe` 0개 확인, 파일 미개봉, 레지스트리 읽기 전용. HKCU 등록 값 `FilePathCheckerModule`(DLL 존재) / `RegisterModule('FilePathCheckDLL', 'SecurityModule')` = False, `'FilePathCheckerModule'` = True / 종료 후 `Hwp.exe` 0개.
+- 수정: N17 `d230db5`(날짜 뒤 공백 보존), N16 `45ffb38`(등록 이름 우선 시도·실패 경고, GUI 로그 배선 테스트는 배선 제거 시 RED 확인).
+- 정적(`45ffb38`): 292 tests OK(skip 1), `py_compile` 43개 OK, AST `global` 0건, GUI 하네스 7개 상태 exit 0.
+- 재개(`tests/out/track-f/w2/run_task7.py`, `converter` 경로 `C:\tmp\hwpx-wave2\anyway_to_hwpx_com.py` 확인, 실행 폴더 `run-20260928-080626/`): 판정 22항목 ALL PASS.
+  - 변환 3건(레이아웃 PDF·`--doc-type sihaengmun`·`--official`): exit 0, 보안 모듈 경고 0, 확인 창 0, 자가검증 note 0(레이아웃 모드 무후처리 한글 저장본 포함), 편집기 안전 게이트 PASS 3/3.
+  - 시행문: `1.` 단락 paraPr 21 `hc:left` 620·1240, `가.` 단락 paraPr 22 960·1920 → §8 기록값(620·960) 일치.
+  - `--official`: 본문 `2026. 3. 22. 행사 안내`·`강사료 금400,000원(금사십만원)`, '끝' 없음, note `[표기 점검] 시간 표기 1건: '오후 3시 20분' → '15:20'` 1건.
+  - 한글 재열람(창 표시)→PDF 저장 2/2, 1쪽 렌더 육안 확인: 항목 들여쓰기·금액·날짜 표기 정상.
+  - 실행 전후 `Hwp.exe` 0개, 단계 중 외부 한글 출현 0건.
+- 발견 N19: 시행문 산출물 `가.`↔`나.` 사이·`2.` 다음 `가.` 앞 빈 단락 — `build_doc` 기존 규칙(`e402f41`), 파서 블록에는 없음, main 동일(웨이브 2 회귀 아님).

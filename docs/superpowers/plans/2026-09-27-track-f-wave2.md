@@ -27,7 +27,7 @@
 
 **Interfaces:** Produces `anyway_to_hwpx_com.__version__: str`(릴리스 시 태그 날짜 `YYYY.MM.DD`, 개발 중 `YYYY.MM.DD+dev`), CLI `--version`, GUI 제목 `HWPX 변환기 {__version__}`
 
-- [ ] RED — 테스트
+- [x] RED — 테스트
 
 ```python
 class VersionTests(unittest.TestCase):
@@ -44,10 +44,10 @@ class VersionTests(unittest.TestCase):
 
 GUI 소스 계약(`GuiCharacterizationTests`): `self.assertIn('self.title(f"HWPX 변환기 {converter.__version__}")', source)`
 
-- [ ] GREEN — `__version__ = '2026.09.27+dev'`(모듈 상단), `parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')`, GUI `self.title(f"HWPX 변환기 {converter.__version__}")`
-- [ ] 저장소 밖 판정 스크립트 4종(`tests/out/track-f/diag_exe_windows.py`·`smoke_exe.py`·`wait_window.py`·`close_window.py`)을 제목 **접두** 일치("HWPX 변환기")로 변경 — 정확 일치면 버전 포함 제목에서 창 미검출. `scripts/` 승격 여부는 병합 시 재질의
-- [ ] README 릴리스 절차: 1단계 앞에 "`anyway_to_hwpx_com.__version__`을 릴리스 태그 날짜로 갱신(개발 중 `+dev`)" 추가, 기동 판정 문구를 "제목이 'HWPX 변환기'로 시작하는 메인 창"으로 수정(양 언어)
-- [ ] 전체 스위트 → 커밋 `Track F: 버전 표기 --version·GUI 제목 (F-1c)`
+- [x] GREEN — `__version__ = '2026.09.27+dev'`(모듈 상단), `parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')`, GUI `self.title(f"HWPX 변환기 {converter.__version__}")`
+- [x] 저장소 밖 판정 스크립트 4종(`tests/out/track-f/diag_exe_windows.py`·`smoke_exe.py`·`wait_window.py`·`close_window.py`)을 제목 **접두** 일치("HWPX 변환기")로 변경 — 정확 일치면 버전 포함 제목에서 창 미검출. `scripts/` 승격 여부는 병합 시 재질의
+- [x] README 릴리스 절차: 1단계 앞에 "`anyway_to_hwpx_com.__version__`을 릴리스 태그 날짜로 갱신(개발 중 `+dev`)" 추가, 기동 판정 문구를 "제목이 'HWPX 변환기'로 시작하는 메인 창"으로 수정(양 언어)
+- [x] 전체 스위트 → 커밋 `Track F: 버전 표기 --version·GUI 제목 (F-1c)`
 
 ### Task 2: 문서유형 전역 상태 제거 (F-3a)
 
@@ -55,7 +55,7 @@ GUI 소스 계약(`GuiCharacterizationTests`): `self.assertIn('self.title(f"HWPX
 
 **Interfaces:** Produces `detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None, doc_type='plan')`, `convert_file(..., pdf_mode='layout', doc_type='plan', official=False)`; `_ALLOW_ROMAN_LEVEL`은 `ContextVar[bool]`(default True)
 
-- [ ] RED — 테스트(`RomanLevelParseWiringTests` 교체)
+- [x] RED — 테스트(`RomanLevelParseWiringTests` 교체)
 
 ```python
 class RomanLevelParseWiringTests(unittest.TestCase):
@@ -87,7 +87,7 @@ class RomanLevelParseWiringTests(unittest.TestCase):
         self.assertEqual([n for n in ast.walk(tree) if isinstance(n, ast.Global)], [])
 ```
 
-- [ ] GREEN
+- [x] GREEN
 
 ```python
 import contextvars
@@ -110,13 +110,13 @@ def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=N
 
 기존 `detect_and_parse` 본문은 `_parse_by_extension`으로 이름만 옮김. `convert_file`은 `doc_type`을 두 `detect_and_parse` 호출에 전달, `main`은 `global` 2줄 삭제 후 `doc_type=args.doc_type` 전달.
 
-- [ ] 전체 스위트 → 커밋 `Track F: 문서유형을 변환 범위 ContextVar로 — 전역 누수 제거 (F-3a)`
+- [x] 전체 스위트 → 커밋 `Track F: 문서유형을 변환 범위 ContextVar로 — 전역 누수 제거 (F-3a)`
 
 ### Task 3: 공문 정규화 분리 `--official` (F-3b)
 
 **Files:** Modify `anyway_to_hwpx_com.py` — `convert_file.convert_loaded` 정규화 블록, `main` / Test: `tests/test_conversion_notes.py`(클래스 추가)
 
-- [ ] 특성화 테스트(현행 고정, 통과해야 정상): `--insert-end-mark` 경로의 build_doc 입력 blocks — **코드 변경 전 먼저 실행**, 실패하면 기대값을 실제 출력에 맞춰 고침(코드를 기대값에 맞추지 않음)
+- [x] 특성화 테스트(현행 고정, 통과해야 정상): `--insert-end-mark` 경로의 build_doc 입력 blocks — **코드 변경 전 먼저 실행**, 실패하면 기대값을 실제 출력에 맞춰 고침(코드를 기대값에 맞추지 않음)
 
 ```python
 def _captured_blocks(self, **kwargs):
@@ -139,7 +139,7 @@ def test_insert_end_mark_keeps_current_normalization_and_end_mark(self):
     ])
 ```
 
-- [ ] RED
+- [x] RED
 
 ```python
 def test_official_normalizes_without_end_mark(self):
@@ -157,7 +157,7 @@ def test_cli_official_flag_reaches_convert_file(self):
     ...  # main([src, '-o', tmp, '--official']) → convert_file 호출 kwargs official=True (patch)
 ```
 
-- [ ] GREEN
+- [x] GREEN
 
 ```python
         if not rendered_layout and (official or insert_end_mark):
@@ -171,7 +171,7 @@ def test_cli_official_flag_reaches_convert_file(self):
 
 `main`: `--official`(help: 공문 표기 정규화(날짜·금액)와 표기 점검 — "끝" 없이. --insert-end-mark는 이를 포함) → `official=args.official`
 
-- [ ] 전체 스위트 → 커밋 `Track F: 공문 정규화를 --official로 분리, --insert-end-mark 현행 유지 (F-3b)`
+- [x] 전체 스위트 → 커밋 `Track F: 공문 정규화를 --official로 분리, --insert-end-mark 현행 유지 (F-3b)`
 
 ### Task 4: 시간 표기 린트 (F-3d, 경고만)
 
@@ -181,7 +181,7 @@ def test_cli_official_flag_reaches_convert_file(self):
 
 **선결 결정(사용자):** 표기 린트 등급 — 기존 3종('및'·순화·천원)이 `[확인 필요]`라 웨이브 1 GUI가 해당 표현만 있어도 "변환 완료(확인 필요)"를 띄움(실측: `samples/sample_complex.md` 2건). 결정에 따라 표기 린트 접두어·GUI 집계 대상 확정 후 이 Task 진행
 
-- [ ] RED
+- [x] RED
 
 ```python
 class OfficialTimeLintTests(unittest.TestCase):
@@ -212,7 +212,7 @@ class OfficialTimeLintTests(unittest.TestCase):
         self.assertIn("2건", notes[0])
 ```
 
-- [ ] GREEN
+- [x] GREEN
 
 ```python
 _TIME_EXPR_PATTERN = re.compile(r'(?:(오전|오후)\s*)?(?<!\d)(\d{1,2})\s*시(?!간)(?:\s*(\d{1,2})\s*분)?')
@@ -237,16 +237,16 @@ def lint_official_time(blocks):
 
 (`_lint_texts`는 `lint_money_notation`의 텍스트 수집을 추출한 공용 함수 — 두 린트가 공유. 정규화 블록에 `notes.extend(lint_official_time(blocks))` 추가)
 
-- [ ] 전체 스위트 → 커밋 `Track F: 시간 표기 린트 — 24시각제·쌍점 권장 경고 (F-3d)`
+- [x] 전체 스위트 → 커밋 `Track F: 시간 표기 린트 — 24시각제·쌍점 권장 경고 (F-3d)`
 
 ### Task 5: GUI 문서유형·정규화 선택 (F-3c)
 
 **Files:** Modify `anyway_to_hwpx_gui.py`(변수·start_conversion·_convert_worker·_set_busy), `gui_layout.py`(옵션 행 추가), `gui_conversion_worker.py`(`ConversionSnapshot` 필드·`convert_file` 전달) / Test: `tests/test_gui_drop_wiring.py`(스냅샷 인자 — 의도적 변경)
 
-- [ ] RED — 스냅샷 테스트 기대값을 `(tuple(["source.pdf"]), "output", False, True, "editable", True, "sihaengmun")`로 바꾸고 fake app에 `official=Value(True)`, `doc_type=Value("sihaengmun")` 추가. worker 테스트: `convert_file` patch의 `call_args.kwargs`에 `official`·`doc_type` 전달 확인
-- [ ] GREEN — `self.official = tk.BooleanVar(value=False)`, `self.doc_type = tk.StringVar(value="plan")`; `ConversionSnapshot`에 `official: bool = False`, `doc_type: str = "plan"`; `run_conversion`이 `official=snapshot.official, doc_type=snapshot.doc_type` 전달; `gui_layout.build_ui`에 `doc_frame`(row=3): 라벨 "문서 유형" + 라디오 "계획·보고(Ⅰ.부터)"/"시행문(1.부터)" + 체크 "공문 표기 정규화(날짜·금액·표기 점검)"; PDF 행 row=4로 이동; `_set_busy`에 신규 컨트롤 3개 포함
-- [ ] "끝" 체크박스 문구에 "(정규화 포함)" 추가 — 끝을 켜면 정규화가 함께 적용됨을 표시(정규화 체크 해제가 무효인 혼동 방지)
-- [ ] GUI 상태 하네스 7개 exit 0 + 최소 크기(700×560) 캡처로 새 행 잘림 여부 확인 → 커밋 `Track F: GUI 문서유형·공문 표기 정규화 선택 (F-3c)`
+- [x] RED — 스냅샷 테스트 기대값을 `(tuple(["source.pdf"]), "output", False, True, "editable", True, "sihaengmun")`로 바꾸고 fake app에 `official=Value(True)`, `doc_type=Value("sihaengmun")` 추가. worker 테스트: `convert_file` patch의 `call_args.kwargs`에 `official`·`doc_type` 전달 확인
+- [x] GREEN — `self.official = tk.BooleanVar(value=False)`, `self.doc_type = tk.StringVar(value="plan")`; `ConversionSnapshot`에 `official: bool = False`, `doc_type: str = "plan"`; `run_conversion`이 `official=snapshot.official, doc_type=snapshot.doc_type` 전달; `gui_layout.build_ui`에 `doc_frame`(row=3): 라벨 "문서 유형" + 라디오 "계획·보고(Ⅰ.부터)"/"시행문(1.부터)" + 체크 "공문 표기 정규화(날짜·금액·표기 점검)"; PDF 행 row=4로 이동; `_set_busy`에 신규 컨트롤 3개 포함
+- [x] "끝" 체크박스 문구에 "(정규화 포함)" 추가 — 끝을 켜면 정규화가 함께 적용됨을 표시(정규화 체크 해제가 무효인 혼동 방지)
+- [x] GUI 상태 하네스 7개 exit 0 + 최소 크기(700×560) 캡처로 새 행 잘림 여부 확인 → 커밋 `Track F: GUI 문서유형·공문 표기 정규화 선택 (F-3c)`
 
 ### Task 6: 변환 직후 자가검증 (F-2c)
 
@@ -254,8 +254,8 @@ def lint_official_time(blocks):
 
 **Interfaces:** Produces `self_check_hwpx(hwpx_path) -> list[str]` (`[확인 필요] 산출물 자가검증: …`)
 
-- [ ] 사전 확인은 Task 7의 레이아웃 모드 PDF 실변환(무후처리 한글 저장본)으로 대체 — 사용자 Vault 파일은 열지 않음. 자가검증 note가 나오면 루트 선언 검사를 후처리 경로에만 적용
-- [ ] RED — 픽스처 4종(정상·mimetype 순서 위반·XML 파손·rowCnt 누락)
+- [x] 사전 확인은 Task 7의 레이아웃 모드 PDF 실변환(무후처리 한글 저장본)으로 대체 — 사용자 Vault 파일은 열지 않음. 자가검증 note가 나오면 루트 선언 검사를 후처리 경로에만 적용
+- [x] RED — 픽스처 4종(정상·mimetype 순서 위반·XML 파손·rowCnt 누락)
 
 ```python
 def _package(path, *, mimetype_first=True, broken_section=False, drop_rowcnt=False):
@@ -277,16 +277,16 @@ def _package(path, *, mimetype_first=True, broken_section=False, drop_rowcnt=Fal
 
 정상 → `[]`, 나머지 3종 → 각 1건 이상 `[확인 필요] 산출물 자가검증`, ZIP 아님 → 1건
 
-- [ ] GREEN — 표준 라이브러리 구현(ZIP 열기, 첫 엔트리 `mimetype`·STORED, `*.xml`·`*.hpf` 파싱, header·section 루트 시작 태그에 `HWPML_ROOT_NAMESPACES` 15종 선언, section의 모든 `hp:tbl`에 `rowCnt`·`colCnt`), `convert_loaded`에서 `notes.extend(self_check_hwpx(out))`(후처리 뒤, 사전 확인 결과에 따라 레이아웃 경로 포함 여부 결정). 진단 단계 이름은 추가하지 않음(기존 단계 계약 유지)
-- [ ] 전체 스위트 → 커밋 `Track F: 변환 직후 산출물 자가검증 (F-2c)`
+- [x] GREEN — 표준 라이브러리 구현(ZIP 열기, 첫 엔트리 `mimetype`·STORED, `*.xml`·`*.hpf` 파싱, header·section 루트 시작 태그에 `HWPML_ROOT_NAMESPACES` 15종 선언, section의 모든 `hp:tbl`에 `rowCnt`·`colCnt`), `convert_loaded`에서 `notes.extend(self_check_hwpx(out))`(후처리 뒤, 사전 확인 결과에 따라 레이아웃 경로 포함 여부 결정). 진단 단계 이름은 추가하지 않음(기존 단계 계약 유지)
+- [x] 전체 스위트 → 커밋 `Track F: 변환 직후 산출물 자가검증 (F-2c)`
 
 ### Task 7: 실COM 검증·기록
 
-- [ ] 정적: 전체 스위트, `py_compile`, AST `global` 0건, GUI 하네스 7개
-- [ ] 실COM(사용자 폴더 하위 `tests/out/track-f/w2/`). 시작 전 `tasklist`에 `Hwp.exe`가 있으면 **중단하고 사용자에게 문의**(사용 중 세션과 병행 금지):
+- [x] 정적: 전체 스위트, `py_compile`, AST `global` 0건, GUI 하네스 7개
+- [x] 실COM(사용자 폴더 하위 `tests/out/track-f/w2/`). 시작 전 `tasklist`에 `Hwp.exe`가 있으면 **중단하고 사용자에게 문의**(사용 중 세션과 병행 금지):
   - 레이아웃 모드 텍스트 PDF 1건 → 자가검증 note 0건(무후처리 한글 저장본의 루트 선언 확인 겸)
   - `--doc-type sihaengmun` 변환 → 목록 paraPr `hc:left`가 §8 기록값(1.→620·가.→960)과 일치
   - `--official` 변환 → 산출물 본문에 `2026. 3. 22.`·`금400,000원(금사십만원)` 존재·"끝." 부재, 시간 린트 note 1건
   - 두 산출물 모두 자가검증 note 0건·안전 게이트 PASS, 한글 재열람·PDF 1쪽 렌더 육안 확인
-- [ ] 기록: `IMPROVEMENT_PLAN.md` §11-11 웨이브 2 결과표, `verification-log.md`, 구현 명세 체크박스 → 커밋 `Track F: 웨이브 2 검증 결과 기록`
+- [x] 기록: `IMPROVEMENT_PLAN.md` §11-11 웨이브 2 결과표, `verification-log.md`, 구현 명세 체크박스 → 커밋 `Track F: 웨이브 2 검증 결과 기록`
 - [ ] 통합: 브랜치 테스트 green 확인 후 사용자에게 병합·push 여부 확인(push는 L4)
