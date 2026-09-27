@@ -323,3 +323,208 @@ kordoc(v4.0.5) 업그레이드 후 참고 사항을 대조해 4개 항목 반영
 - **수정**: `hwp.CreateAction` 경로 대신 **`hwp.HParameterSet.HSecDef` + `hwp.HAction.GetDefault/Execute('PageSetup', sec.HSet)`**(속성 접근 방식) 경로로 재작성 — 이 경로는 실COM에서 여백 변경이 실제로 지속됨을 직접 확인. `anyway_to_hwpx_com.py`의 `configure_pdf_page_setup()` 수정.
 - **검증**: TDD로 `tests/test_pdf_hwp_image_writer.py`의 관련 계약 테스트 4건을 새 API 경로 기준으로 재작성(RED 확인 후 GREEN). 전체 COM-불요 스위트 243 passed 유지. 실COM `HWPX_RUN_COM_TESTS=1` 통합 테스트가 **테스트 생성 이래 최초로 green**(`test_generated_pdf_round_trips_through_hwp_image_pages`, 1584.6s).
 - **재현/재검증**: `HWPX_RUN_COM_TESTS=1 python -m unittest tests.test_pdf_hwp_com_integration` (Windows + 한컴오피스 COM 필요).
+
+---
+
+## 11. Track F — 신뢰성·배포 정상화 로드맵 (2026-09-27 수립·미착수)
+
+> 기준: `main` `c5438a8`(= `origin/main`), 2026-09-27 실측. 본 절은 계획만 담고 코드는 변경하지 않음.
+> 목표 상태: **"완료"로 표시된 변환 결과와 공개 배포본을 그대로 신뢰할 수 있는 변환기** — 조용한 실패 0건, 공개 최신 릴리스 = 검증된 `main`.
+> 원칙: 요청 범위 최소 변경 · 하위 호환 추가형(additive) · 측정 전 성능 주장 금지 · 독립 리팩터링 트랙 없음(트랙이 요구하는 추출만).
+
+### 11-1. 핵심 요약
+
+| 순위 | 과제 | 한 줄 근거 | 규모(추정) | 승인 |
+| :-: | :-- | :-- | :-: | :-: |
+| 1 | F-1 릴리스·저장소 정상화 | 공개 최신 `v2026.08.06`(→ `c6e91df`)에 E-7 PDF 여백 수정 미포함 | 소 | L4 (D-1·D-2) |
+| 2 | F-2 조용한 실패 제거 | 후처리·빌드 경고 10곳이 `print`만 사용 → `console=False` exe에서 소실 | 소~중 | L2 |
+| 3 | F-3 옵션 정합성 | 공문 정규화가 `--insert-end-mark`에 결합, 문서유형은 CLI 전역 상태라 GUI 선택 불가 | 중 | L2 |
+| 4 | F-4 실물 회귀 러너 | 실COM 회귀가 PDF layout 1건뿐 — 공문·계획서·병합 표 회귀 부재 | 중 | L3 |
+| 5 | F-5 COM 세션 복구 | 인스턴스 1개로 배치 처리, 오염 시 잔여 파일 연쇄 실패 구조 | 소~중 | L2·L3 |
+| 6 | F-6 Markdown 충실도 | 이미지 무통보 삭제, 인라인 강조 평문화 | 중 | D-4·D-5 |
+
+### 11-2. 기준선 (2026-09-27 실측)
+
+| 항목 | 값 | 근거 유형 |
+| :-- | :-- | :-- |
+| HEAD | `c5438a8` = `origin/main`, 미푸시 0 | 실측(git) |
+| COM 불요 스위트 | 243 tests · skip 1(COM 통합 테스트 — `HWPX_RUN_COM_TESTS` 미설정 게이트) · 8.9s · OK / bs4 4.14.3 설치 확인 | 실측(unittest -v·import) |
+| 모놀리스 | `anyway_to_hwpx_com.py` 3,023줄 · 함수 131개 · 최장 `parse_markdown` 140줄 | 실측(AST) |
+| 모놀리스 외부 참조 표면 | 64개 심볼(tests·GUI·scripts·shim, 비공개 `_` 심볼·`time` 패치 포함) | 실측(AST) |
+| 공개 릴리스 | 최신 `v2026.08.06` → `c6e91df`(자산 81,276,499 bytes). `main` 추적 exe는 73,746,447 bytes — 문서 기록 73,746,619와 172 bytes 차이, 릴리스 시 SHA-256으로 확정 | 실측(gh·git) |
+| 저장소 | GitHub public · 393,158KB / 로컬 loose objects 844.60MiB / `dist/anyway_to_hwpx_gui.exe` 추적 중(이력 7개 버전, 73~88MB) | 실측(gh api·git) |
+| 하류 호출자 | 전역 shim `~/.claude/to_hwpx_com.py` → `main()` / Claude 스킬 8종·Codex 스킬 1종(+ `.agents` 사본)이 CLI 사용(`-o`, `--insert-end-mark`) | 실측(Grep) |
+
+### 11-3. 신규 진단
+
+| ID | 발견 | 근거(유형 · 위치) | 영향 | 등급 |
+| :-- | :-- | :-- | :-- | :-: |
+| N1 | 공개 최신 릴리스가 `main`보다 3커밋 뒤처짐 — E-7(`19806ca`) 미포함 | 실측: tag `v2026.08.06` → `c6e91df` | layout 모드 PDF 변환 시 페이지 이미지가 HWP 기본 여백만큼 밀린 exe가 배포 중 | 🔴 |
+| N2 | 후처리·빌드 경고의 GUI 소실 — 경고·참고 출력 10곳이 `print`만 사용, GUI는 `console=False`·스트림 리다이렉트 없음. 파싱 단계 note(`_add_conversion_note`)는 `result['notes']`로 GUI 도달 | 코드: `anyway_to_hwpx_com.py:1952·2031·2081·2217·2224·2250·2327`, `table_hwpx_postprocess.py:234·267·319`, `anyway_to_hwpx_gui.spec:92` / GUI 재현 미실시 | 서식 후처리 실패에도 GUI는 "완료" 표시. CLI는 출력되나 종료코드 0 → 하류 스킬은 성공 처리 | 🔴 |
+| N3 | 변환 경로에 산출물 자가검증 없음 — 안전 게이트는 별도 스크립트(python-hwpx 의존) | 코드: `convert_file` 후처리 블록 `anyway_to_hwpx_com.py:2885-2894` | 구조 결함이 사용자 열람 시점까지 미검출 | 🟠 |
+| N4 | 경고 피로 — `TableColWidth` 미지원 환경에서 표마다 재시도·경고. note는 수집 시 stdout, 종료 시 stderr로 CLI 중복 출력 | 코드: `:2315-2327`, `:859-861`·`:3003-3004` / 기록: `verification-log.md` 2026-06-09 | 실제 경고가 묻힘 | 🟡 |
+| N5 | 공문 정규화(날짜·금액·린트)가 `--insert-end-mark`에 결합 | 코드: `:2829-2834` | "끝" 없이 정규화만 적용 불가, GUI "끝 표시" 체크박스 의미 불투명 | 🟠 |
+| N6 | 문서유형이 모듈 전역(`_ALLOW_ROMAN_LEVEL`)·CLI 전용 | 코드: `:194·2969-2970` / `gui_conversion_worker.py` `ConversionSnapshot`에 필드 없음 | GUI에서 시행문 항목체계 적용 불가 | 🟠 |
+| N7 | Markdown 이미지 무통보 삭제, 링크·강조 평문화 | 코드: `_clean_inline` `:127-137` | 보고서 그림 누락을 사용자가 인지 못 함 | 🟠 |
+| N8 | COM 인스턴스 1개로 배치 처리, 오염 시 재생성 없음 / CLI `finally`의 `hwp.Quit()` 무보호 | 코드: `main` `:2972-3011`, `gui_conversion_worker.run_conversion` / 타 저장소 실측 기록(단일 인스턴스 도중 오염) / 본 저장소 미재현 | 대량 변환 시 연쇄 실패 | 🟠 |
+| N9 | 시간 표기(정본 §1-2, 24시각제 `15:20`) 미구현 | 코드: 관련 로직 검색 결과 없음 | 정본 미준수 | 🟡 |
+| N10 | exe 바이너리 git 추적 — `.gitignore`의 `dist/`와 모순 | 실측: `git ls-files dist`, `git log --stat` | 공개 저장소 비대·클론 비용 | 🟠 |
+| N11 | Java 11 미만 안내가 영문 note 1줄(E-6 미착수) | 코드: `:1640-1649` | 사용자 조치 방법 불명 | 🟡 |
+| N12 | 문서 스테일·경로 노출 — `handoff.md`(07-12), `dist/` 매뉴얼(05-28), 마스터 프롬프트 미추적(개인 경로 포함). 기추적 문서(본 파일 상단·`verification-log.md`)에도 사용자 절대경로 기공개 | 실측: ls·git status·Grep | 인계·안내 부정확, 추가 커밋 시 노출 확대 — 이후 추적 문서는 상대 경로만 | 🟡 |
+| N13 | (범위 밖) `.agents` 스킬 2곳이 존재하지 않는 `%USERPROFILE%\.Codex\to_hwpx_com.py` 안내 | 실측: Grep·Glob | Codex 측 HWPX 변환 실패 가능 | 별도 과제 |
+| N14 | 기록 오류 — §10-3·마스터 프롬프트의 "skip 1건 = bs4 미설치"가 현 환경과 불일치(실제 skip은 COM 게이트) | 실측: `unittest -v` skip 사유·`import bs4` | §10-3 미결 방침이 이미 해소됐는데 미결로 남음 | 🟡 |
+
+### 11-4. 하류 호환 계약 (Track F 전 기간 불변)
+
+| 표면 | 불변 조건 |
+| :-- | :-- |
+| CLI | 위치 인자 `files`, `-o/--output-dir`, `--insert-end-mark`(현행 의미 = 정규화 + 린트 + "끝") 유지 / 종료코드 0·1·2 의미 유지 |
+| Python API | `main`·`convert_file`의 기존 인자 순서·기본값 유지, 신규 인자는 키워드·기본값으로만 추가 |
+| 모듈 표면 | 실측 64개 참조 심볼의 `anyway_to_hwpx_com` import 경로 유지 — 이동 시 재노출 또는 해당 테스트 동시 갱신 |
+| 산출물 | 이름 충돌 ` - N` 규칙 유지, 기본 동작에서 텍스트 자동 수정 없음(마스터 프롬프트 원칙) |
+
+### 11-5. 트랙 상세
+
+#### F-1 릴리스·저장소 정상화
+
+- **목표**: 공개 최신 릴리스 = 검증된 `main` exe, 저장소는 소스만 추적
+- **범위**: F-1a 현 `main` exe로 신규 릴리스 발행(재빌드 불요, D-1) / F-1b exe 추적 해제·배포는 Releases 전용(D-2) / F-1c 버전 표기(`__version__`·`--version`·GUI 창 제목, 다음 릴리스부터) / F-1d README 개발자 절에 릴리스 체크리스트 추가 / F-1e `dist/` 사용 안내·매뉴얼(05-28)의 현행 기능(PDF 두 모드·끝 표시·문서유형) 반영 여부 점검(갱신은 사용자 확인 후)·`handoff.md` 갱신·§10-3 skip 기록 정정(N14) / 로컬 `git gc`는 효과 실측 후 판단(UPX 바이너리는 델타 압축 효율 낮음)
+- **비범위**: 이력 재작성(D-3), 코드 서명, 자동 업데이트
+- **완료조건**
+  - 최신 릴리스 태그가 가리키는 커밋에 E-7(`19806ca`)이 포함됨
+  - 릴리스 노트에 exe SHA-256·크기·포함 수정(E-7)이 기록됨
+  - `git ls-files dist` 결과가 비어 있음(D-2 승인 시)
+  - `--version` 출력과 GUI 창 제목의 버전 문자열이 일치함(F-1c 적용 릴리스)
+- **검증 센서**: 단위 스위트 → 샘플 변환 + `scripts/hwpx_editor_safety_gate.py` → exe 기동 smoke(사용자 실행 또는 명시 승인 하 실행 — "exe 세션 직접 사용 금지" 규칙 준수) → `gh release view`로 태그·자산 재조회
+- **반복한도**: 빌드 2회, 동일 실패는 조건 변경 없이 재시도 금지
+- **승인·검토**: F-1a·F-1b L4(사용자 명시 승인), F-1c·F-1d·F-1e L2 / 검토강도 enhanced(외부 공개 반영)
+
+#### F-2 조용한 실패 제거 (관측성)
+
+- **목표**: 변환 중 발생한 모든 경고가 CLI·GUI 동일 경로로 사용자에게 도달하고 결과 상태에 반영됨
+- **범위**
+  - F-2a 경고·참고 출력 10곳을 기존 note 수집 경로로 전환, 수집 종료 시점을 후처리 이후로 이동, CLI 중복 출력 제거
+  - F-2b GUI: 경고 note 1건 이상인 파일을 `warning` 상태·로그 태그로 표시(기존 상태 체계 재사용)
+  - F-2c 경량 자가검증(표준 라이브러리): ZIP 열림 · `mimetype` 첫 엔트리 STORED · 각 XML 파싱 · `header.xml`/`section0.xml` 루트 네임스페이스 · 표 `rowCnt`/`colCnt` 존재 — 실패 시 `[확인 필요]` note
+  - F-2d `TableColWidth` 미지원을 1회 감지하면 같은 변환에서 재시도 중단, 문구는 `[참고]`로 강등(열 폭은 XML 후처리가 적용)
+  - F-2e Markdown 이미지·링크 제거 시 건수 note(예: `[확인 필요] 이미지 2개 미삽입`)
+  - F-2f E-6 흡수: Java 11 미만 note 한국어화 + 조치 안내(Java 11 이상 설치 또는 text 스택), README 요건 표 보강
+- **비범위**: 후처리 단일 트랜잭션화(측정·필요 확인 전 보류), python-hwpx 게이트 내장, 경고 시 종료코드 변경(하류 계약), 로그 파일 저장
+- **완료조건**
+  - 후처리 6단계(여백·표·목록 내어쓰기·prid·줄 간격·단락 간격) 각각에 예외를 주입하면 `result['notes']`에 해당 경고가 1건 이상 포함됨
+  - `anyway_to_hwpx_com.py`·`table_hwpx_postprocess.py`에서 note 수집을 거치지 않는 경고 `print`가 0곳임(grep)
+  - 손상 HWPX 픽스처 3종(mimetype 순서 위반·XML 파손·`rowCnt` 누락)은 모두 자가검증 note 발생, 정상 샘플 산출물은 0건
+  - GUI 상태 하네스의 `warning` 상태가 실제 note 경로로 재현됨
+  - 실COM 샘플 변환 1회에서 `TableColWidth` 문구가 변환당 최대 1건
+- **검증 센서**: 단위 스위트 · grep · `tests/gui_state_harness.py --state warning` · 실COM 샘플 변환 + HWP 열람(실물 검증)
+- **반복한도·승인·검토**: 3회 / L2(로컬 수정)·L3(실COM 실행) / standard
+
+#### F-3 옵션 정합성 (문서유형·공문 정규화 분리, 추가형)
+
+- **목표**: 문서유형·공문 정규화·"끝" 표시를 독립적으로 선택 가능, 기존 호출의 산출 내용은 불변
+- **범위**
+  - F-3a `convert_file(..., doc_type='plan')` 키워드 인자 신설, 전역 `_ALLOW_ROMAN_LEVEL` 제거(`tests/test_roman_level_option.py` 동시 갱신)
+  - F-3b `--official` 신설 = 날짜·금액 정규화 + 린트("끝" 없음). `--insert-end-mark`는 현행 그대로(정규화 포함)
+  - F-3c GUI: 문서유형(계획·보고 / 시행문) 선택 + "공문 표기 정규화" 체크 추가, "끝 표시" 선택 시 정규화 자동 포함(현행 유지)
+  - F-3d 시간 표기(§1-2) 린트 — 경고만, 자동 변환은 D-6
+- **비범위**: 프로필 파일(JSON) 체계, 신규 문서유형 추가
+- **완료조건**
+  - `--insert-end-mark` 단독 변환의 blocks가 변경 전과 동일함(스냅샷 대조)
+  - `--official` 단독 변환은 날짜·금액이 정규화되고 "끝" 블록이 없음
+  - 한 프로세스에서 `sihaengmun` → `plan` 순으로 연속 변환하면 두 번째 결과에 로마숫자 레벨이 적용됨(전역 누수 없음)
+  - `ConversionSnapshot`에 문서유형·정규화 필드가 있고 worker의 `convert_file` 호출까지 전달됨(단위 테스트)
+  - 모놀리스의 `global` 선언이 0건(AST)
+- **검증 센서**: 단위 스위트 · 스냅샷 대조 · GUI 상태 하네스 · 실COM `--doc-type sihaengmun` 변환 XML 들여쓰기 확인(§8 기록값 620 대조)
+- **반복한도·승인·검토**: 3회 / L2 / standard + 하류 계약 영향으로 교차검토 권장
+
+#### F-4 실물 회귀 체계 (골든 코퍼스)
+
+- **목표**: 대표 문서 유형 전부를 실COM으로 변환·렌더링해 기준선 대비 변화를 한 번에 판정
+- **범위**
+  - F-4a 합성 골든 코퍼스 8종(`samples/golden/`, 공개 저장소이므로 합성·비식별만): ① 시행문(붙임·끝) ② 계획서(Ⅰ.·예산 표 금액·일정 표) ③ 보고서(병합 표·2쪽 이상 긴 표) ④ 양식(☐ 동의·서명란 2열 표) ⑤ CSV ⑥ XLSX 다중 시트 ⑦ DOCX(제목 스타일·표) ⑧ 텍스트 PDF(layout·editable)
+  - F-4b `scripts/golden_run.py`: COM 세션 1개로 일괄 변환 → 자가검증(F-2c) → 안전 게이트 → HWP `SaveAs` PDF → 쪽수·표 수·콘텐츠 경계·경고 수·변환 시간 → `tests/out/golden/<날짜>/` 보고서 + 직전 기준선 diff
+  - F-4c 첫 실행으로 기준선 확정(문서별 변환 시간·쪽수·경고 수) — 성능 과제는 이 수치로만 판단
+  - F-4d F-1d 릴리스 체크리스트에 필수 단계로 편입
+- **비범위**: CI 자동 실행(COM 필요), 픽셀 단위 시각 diff, 실제 업무 문서 투입
+- **완료조건**
+  - 8종 모두 변환 성공 · 자가검증 note 0건 · 게이트 PASS · PDF 재추출 성공
+  - 긴 표 문서의 2쪽 상단 머리글 반복 여부가 보고서에 PASS/FAIL로 기록됨(FAIL이면 결함 등록)
+  - 기준선 파일에 문서별 변환 시간·쪽수·경고 수가 기록됨
+  - 재실행 시 차이가 없으면 "변화 없음", 있으면 항목별 diff가 출력됨
+- **검증 센서**: 러너 보고서 + 기준선 확정 시 사용자 HWP 육안 검수 1회
+- **반복한도·승인·검토**: 3회 / L3(실행 중 HWP 창 표시 — 실행 시점 사용자 고지) / standard
+
+#### F-5 COM 세션 복구
+
+- **목표**: 한 파일의 COM 실패가 같은 배치의 나머지 파일로 전파되지 않음
+- **범위**: F-5a 파일 실패 시 경량 COM 호출로 인스턴스 상태 확인 → 이상이면 보호된 `Quit` 후 재생성, 배치당 재시작 최대 2회, 재시작 사실을 note로 기록(CLI `main`·GUI worker 공용 함수 1개) / F-5b CLI `finally`의 `hwp.Quit()` 예외 보호 / F-5c 고정 대기(시작 1.5s, 파일당 약 1.3s)는 F-4c 실측 후 단축 여부 판단(실측 없이 변경 금지)
+- **비범위**: 병렬 변환, 프로세스 풀, 잔여 `Hwp.exe` 강제 종료
+- **완료조건**
+  - 가짜 HWP에 "2번째 파일에서 인스턴스 사망"을 주입하면 3번째 파일이 새 인스턴스로 성공하는 테스트 통과
+  - 재시작 한도 초과 시 남은 파일이 사유와 함께 실패 목록에 기록됨
+  - 실COM 골든 러너 결과가 F-4 기준선과 동일함(정상 경로 무회귀)
+- **반복한도·승인·검토**: 3회 / L2·L3 / standard
+
+#### F-6 Markdown 충실도 (결정 의존)
+
+- **목표**: 원고의 그림·강조가 사용자가 선택한 방식대로 반영됨
+- **범위**: F-6a 로컬 이미지 삽입(`![alt](경로)` → `InsertPicture`, 본문 폭 초과 시 비율 유지 축소, 원격 URL·없는 파일은 note) — D-4 / F-6b 굵게 보존 옵트인(`--keep-bold`), 기본은 현행(제거) — D-5
+- **비범위**: 표 셀 안 이미지, 각주·하이퍼링크 필드, 원격 이미지 다운로드
+- **완료조건**
+  - 이미지 포함 샘플의 HWPX `BinData`에 이미지가 들어 있고 자가검증·게이트 PASS, HWP 열람 시 표시됨
+  - `--keep-bold` 미지정 시 산출 텍스트·서식이 변경 전과 동일함
+  - `--keep-bold` 지정 시 굵게 구간만 bold charPr run으로 분리됨(XML 확인)
+- **반복한도·승인·검토**: 3회 / L2·L3 / standard
+
+### 11-6. 실행 순서
+
+| 웨이브 | 구성 | 선행 조건 | 세션(추정) |
+| :-: | :-- | :-- | :-: |
+| 1 | F-1a·F-1b(D-1·D-2 승인분)·F-1d·F-1e + F-2a·2b·2d·2e·2f | 없음 | 1 |
+| 2 | F-2c + F-3 + F-1c(버전 표기, 다음 릴리스 준비) | 웨이브 1 | 1~2 |
+| 3 | F-4 (기준선 확정) | F-2c(자가검증 재사용) | 1~2 |
+| 4 | F-5 + F-6(D-4·D-5 결정분) | F-4 기준선 | 1~2 |
+
+- 웨이브별 절차: `superpowers:writing-plans` 명세 → TDD(`superpowers:test-driven-development`) → 실COM 실물 검증 → 본 절에 결과 기록
+- 역할 기본값: 실행 Codex / 검토 Claude(harness `_core/03`, 작업별 교체 허용)
+- 서브모듈 주의: 본 저장소는 `~/.claude` 설정 저장소의 서브모듈(상위 포인터 `c5438a8`) — Track F 커밋마다 상위 포인터 변경이 발생하며, 상위 저장소 커밋·push는 별도 승인(CLAUDE.md §3 보호 대상)
+- 공통 완료 게이트: 단위 스위트 green + `py_compile` + 웨이브 완료조건 전부 PASS + 실COM 실물 검증(HWP 열람·여백·글리프). 하나라도 미실시면 PARTIAL
+
+### 11-7. 결정 대기
+
+| ID | 결정 사항 | 권장안 | 근거 | 승인 |
+| :-- | :-- | :-- | :-- | :-: |
+| D-1 | 현 `main` exe로 신규 릴리스 발행 | 발행 — 노트에 E-7·SHA-256 기재 | N1 | L4 |
+| D-2 | exe git 추적 해제 후 push | 해제 — 배포는 Releases 전용 | N10 | L4 |
+| D-3 | 이력 재작성(exe 제거·force push) | 미실행 — 공개 저장소 클론·태그 영향 대비 효과 작음 | N10 | L5 |
+| D-4 | Markdown 로컬 이미지 실제 삽입 | 도입 — 무통보 삭제 해소(알림은 F-2e로 선반영) | N7 | L2 |
+| D-5 | 인라인 굵게 처리 | 옵트인 `--keep-bold`, 기본 현행(제거) — 공문 굵게 사용 드묾, AI 원고 과다 강조 | N7 | L2 |
+| D-6 | 시간 표기 자동 변환 | 린트만 선도입(텍스트 자동 수정 금지 원칙), 실사용 후 재결정 | N9 | L2 |
+| D-7 | 마스터 프롬프트 처리 | 공개 저장소 커밋 금지 / Vault 프롬프트 폴더 이동 또는 `.gitignore` 등록 중 선택(이동은 승인 필요) | N12 | L2 |
+| D-8 | §10-3 "bs4 skip 방침" 미결 건 | 종결 — bs4 설치 확인, 현 skip 1건은 COM 게이트. 기록 정정만(F-1e) | N14 | — |
+| D-9 | E-5 서식 프로필 추출 | 보류 유지 | §9·§10 | — |
+| D-10 | COM 없는 직접 생성 백엔드(Mac·CI) | HOLD — md2hwpx 의도적 퇴역 결정 존중, Mac 경로는 kordoc(harness `_core/12`). 재개 조건: Mac 주력 전환 확정 시 스파이크부터 | 전략 | — |
+
+### 11-8. 리스크·완화
+
+| 리스크 | 완화 |
+| :-- | :-- |
+| 정규화 분리로 하류 스킬 산출물 변화 | 11-4 계약 + `--insert-end-mark` blocks 스냅샷 대조 |
+| 경고 가시화로 GUI `warning` 급증 | F-2d 예상 경고 강등 + 문구에 조치 안내 포함 |
+| 실COM 비결정성(시작 실패·도중 오염) | F-5 복구 + 러너의 동일 실패 무조건 재시도 금지·조정 사항 기록 |
+| 골든 코퍼스에 실무 문서 유입 | 합성·비식별만 사용, 커밋 전 개인정보·절대경로 grep |
+| 모듈 표면 64개 결합으로 수정 파급 | 이동 대신 제자리 수정, 부득이한 이동은 재노출 |
+
+- Track F 전체 비범위: 모놀리스 분해 단독 트랙, 후처리 트랜잭션화, COM 없는 백엔드(D-10), 신규 입력 형식, 코드 서명·자동 업데이트, E-5
+
+### 11-9. 검증 명령 (저장소 루트)
+
+```powershell
+python -m unittest discover -s tests
+python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py
+python anyway_to_hwpx_com.py --preflight
+python anyway_to_hwpx_com.py samples\sample_complex.md -o tests\out\track-f --insert-end-mark
+python scripts/hwpx_editor_safety_gate.py tests\out\track-f\sample_complex.hwpx
+python tests/gui_state_harness.py --state warning --hold-seconds 0.2
+python scripts/golden_run.py   # F-4 산출 예정
+```
