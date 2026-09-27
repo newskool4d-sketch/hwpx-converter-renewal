@@ -171,5 +171,29 @@ class TableColWidthNoteTests(unittest.TestCase):
         self.assertIn("[경고] 열 너비 조정 실패: COM 오류", notes)
 
 
+class MarkdownMediaTests(unittest.TestCase):
+    def setUp(self):
+        converter.pop_conversion_notes()
+
+    def test_image_with_alt_text_leaves_no_residue(self):
+        blocks = converter.parse_markdown("![현황 그래프](chart.png)\n\n본문")
+        self.assertEqual(blocks, [{"type": "p", "text": "본문"}])
+
+    def test_inline_image_and_link_cleanup(self):
+        self.assertEqual(converter._clean_inline("앞 ![그림](a.png)뒤 [안내](https://x.kr)"), "앞 뒤 안내")
+
+    def test_media_counts_become_notes_excluding_code_blocks(self):
+        converter.parse_markdown("![a](a.png) [링크](https://x.kr)\n```\n![b](b.png)\n```\n본문")
+        notes = converter.pop_conversion_notes()
+        self.assertEqual(notes, [
+            "[확인 필요] Markdown 이미지 1개 미삽입(이미지 삽입 미지원) — 필요 시 한글에서 직접 삽입",
+            "[참고] Markdown 링크 1개는 표시 텍스트만 유지(URL 제외)",
+        ])
+
+    def test_plain_markdown_adds_no_media_notes(self):
+        converter.parse_markdown("# 제목\n\n본문")
+        self.assertEqual(converter.pop_conversion_notes(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

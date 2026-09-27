@@ -124,9 +124,13 @@ def _kordoc_commands(kordoc_dir, path):
 
 # ─── Markdown 파서 ─────────────────────────────────────────────────────────────
 
+_MD_IMAGE_PATTERN = re.compile(r'!\[[^\]]*\]\([^\)]+\)')
+_MD_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\([^\)]+\)')
+
+
 def _clean_inline(text):
-    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-    text = re.sub(r'!\[[^\]]*\]\([^\)]+\)', '', text)
+    text = _MD_IMAGE_PATTERN.sub('', text)  # 링크보다 먼저 — 순서가 바뀌면 '!alt'가 본문에 남음
+    text = _MD_LINK_PATTERN.sub(r'\1', text)
     text = re.sub(r'`([^`]+)`', r'\1', text)
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
     text = re.sub(r'__([^_]+)__', r'\1', text)
@@ -366,7 +370,27 @@ def parse_markdown(text):
             blocks.append({'type': 'p', 'text': t})
         i += 1
 
+    images, links = _markdown_media_counts(text)
+    if images:
+        _add_conversion_note(f'[확인 필요] Markdown 이미지 {images}개 미삽입(이미지 삽입 미지원) — 필요 시 한글에서 직접 삽입')
+    if links:
+        _add_conversion_note(f'[참고] Markdown 링크 {links}개는 표시 텍스트만 유지(URL 제외)')
     return blocks
+
+
+def _markdown_media_counts(text):
+    """코드 블록 밖 Markdown 이미지·링크 수 (parse_markdown과 같은 ``` 경계 규칙)."""
+    images = links = 0
+    in_code = False
+    for line in text.splitlines():
+        if line.strip().startswith('```'):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        images += len(_MD_IMAGE_PATTERN.findall(line))
+        links += len(_MD_LINK_PATTERN.findall(_MD_IMAGE_PATTERN.sub('', line)))
+    return images, links
 
 
 def _split_tab_row(line):
