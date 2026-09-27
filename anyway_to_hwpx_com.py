@@ -858,7 +858,6 @@ _conversion_notes = []
 
 def _add_conversion_note(message):
     _conversion_notes.append(message)
-    print(message)
 
 
 def pop_conversion_notes():
@@ -1949,7 +1948,7 @@ def apply_list_hanging_indents(hwpx_path):
             return
         _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(root))
     except Exception as e:
-        print(f'[경고] 목록 내어쓰기 후처리 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 목록 내어쓰기 후처리 실패: {e}')
 
 
 # 공문서 목록 마커 패턴 (텍스트가 이 패턴으로 시작하면 목록 항목)
@@ -2028,7 +2027,7 @@ def fix_body_text_prid(hwpx_path):
         if changed:
             _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(sroot))
     except Exception as e:
-        print(f'[경고] 본문 단락 paraPr 보정 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 본문 단락 paraPr 보정 실패: {e}')
 
 
 # 페이지 여백 (HWPX_작성규칙 7-2): 상 25 / 하 20 / 좌우 25 / 머리말·꼬리말 10 (mm)
@@ -2078,7 +2077,7 @@ def apply_official_line_spacing(hwpx_path):
         if changed:
             _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(root))
     except Exception as e:
-        print(f'[경고] 줄 간격 후처리 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 줄 간격 후처리 실패: {e}')
 
 
 # 정본 §7-3 제목 단락 간격 (앞, 뒤) — 1pt = 100 HWPUNIT
@@ -2214,14 +2213,14 @@ def apply_official_paragraph_spacing(hwpx_path):
         section_root = ET.fromstring(section_xml)
         changed, cloned = _set_heading_para_spacing(header_root, section_root)
         if cloned:
-            print(f'  [참고] 제목 단락 간격: 공유 paraPr {cloned}건 분리 적용 (§7-3)', file=sys.stderr)
+            _add_conversion_note(f'[참고] 제목 단락 간격: 공유 paraPr {cloned}건 분리 적용 (§7-3)')
         if changed:
             _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(header_root))
         if cloned:
             # clone 재배정은 section0.xml의 paraPrIDRef를 바꾸므로 반드시 함께 기록
             _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(section_root))
     except Exception as e:
-        print(f'[경고] 단락 간격 후처리 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 단락 간격 후처리 실패: {e}')
 
 
 def apply_official_page_margins(hwpx_path):
@@ -2247,7 +2246,7 @@ def apply_official_page_margins(hwpx_path):
         if changed:
             _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(root))
     except Exception as e:
-        print(f'[경고] 페이지 여백 후처리 실패: {e}', file=sys.stderr)
+        _add_conversion_note(f'[경고] 페이지 여백 후처리 실패: {e}')
 
 
 def _section_text_width(root):
@@ -2269,7 +2268,8 @@ def _section_text_width(root):
 
 
 def apply_table_layout_profiles(hwpx_path, table_layouts):
-    _apply_table_layout_profiles_new(hwpx_path, table_layouts)
+    for note in _apply_table_layout_profiles_new(hwpx_path, table_layouts) or ():
+        _add_conversion_note(note)
 
 
 def apply_table_width_profiles(hwpx_path, table_headers):
@@ -2880,6 +2880,7 @@ def convert_file(
             _com_call(lambda: doc.Close(isDirty=False))
             time.sleep(0.3)
         if rendered_layout:
+            notes.extend(pop_conversion_notes())
             return {'notes': notes}
         if diagnose_stage:
             diagnose_stage('postprocess')
@@ -2889,6 +2890,7 @@ def convert_file(
         fix_body_text_prid(out)
         apply_official_line_spacing(out)
         apply_official_paragraph_spacing(out)
+        notes.extend(pop_conversion_notes())  # 빌드·후처리 단계 note 합류
         if diagnose_stage:
             diagnose_stage('finalize')
         return {'notes': notes}
