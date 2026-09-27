@@ -238,3 +238,11 @@
   - 한글 재열람(창 표시)→PDF 저장 2/2, 1쪽 렌더 육안 확인: 항목 들여쓰기·금액·날짜 표기 정상.
   - 실행 전후 `Hwp.exe` 0개, 단계 중 외부 한글 출현 0건.
 - 발견 N19: 시행문 산출물 `가.`↔`나.` 사이·`2.` 다음 `가.` 앞 빈 단락 — `build_doc` 기존 규칙(`e402f41`), 파서 블록에는 없음, main 동일(웨이브 2 회귀 아님).
+
+### 웨이브 2 병합·push (2026-09-28, 사용자 결정 "병합 + push")
+
+- 사전: 하류 계약(§11-4) 대조 — `--preflight` 실패 종료 코드 2 유지, 스킬 3개 트리(`~/.claude`·`~/.codex`·`~/.agents` skills)에서 preflight 성공 문구·`SecurityModule` 참조 0건, SessionStart 훅은 shim 파일 존재만 확인. push 대상 변경 내용·커밋 메시지 12건에서 개인 경로·계정·시크릿 문자열 0건.
+- 병합: `main`에서 `git merge --no-ff feature/track-f-wave2` → `2353110`. 병합 결과 292 tests OK(skip 1).
+- 전역 shim: `to_hwpx_com.py --version` = `2026.09.27+dev`. `Hwp.exe` 0개 확인 후 실제 `--preflight` 1회 → exit 0, "HWP COM preflight OK: HWPFrame.HwpObject 생성 및 보안 모듈 등록 성공", 종료 후 `Hwp.exe` 0개.
+- push: `origin`(`newskool4d-sketch/hwpx-converter-renewal`) `768e275..2353110`, 13커밋·14파일, `git ls-remote` = 로컬 `2353110fb034d1e270f290cb0d5a134ec1530a57`.
+- 미실행: exe 재빌드·릴리스(GUI 사용자 반영은 별도 결정), 워크트리 `C:\tmp\hwpx-wave2` 유지.

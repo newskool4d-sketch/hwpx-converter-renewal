@@ -576,6 +576,7 @@ python scripts/golden_run.py   # F-4 산출 예정
 | N16 수정 | PASS | `45ffb38` — HKCU 등록 이름(읽기 전용) 먼저, 관례 이름 `SecurityModule`은 마지막 시도 / 모두 실패 시 `[확인 필요]` 경고(CLI stderr·GUI 로그 err·`--preflight` 실패). 테스트: 등록 이름 우선·실패 경고·GUI 로그 배선(배선 제거 시 RED 확인) |
 | N17 수정 | PASS | `d230db5` — 끝 온점 앞 공백은 온점이 있을 때만 소비. 실COM 산출물 `2026. 3. 22. 행사` 확인 |
 | 실COM 검증(Task 7) 재개 | PASS | 워크트리 코드(`converter: C:\tmp\hwpx-wave2\…`, `2026.09.27+dev`), 실행 폴더 `tests/out/track-f/w2/run-20260928-080626/`. 3건(레이아웃 PDF·`--doc-type sihaengmun`·`--official`) 모두 exit 0·보안 모듈 경고 0·확인 창 0·자가검증 note 0·편집기 안전 게이트 PASS. 시행문 `1.` `hc:left` 620·`가.` 960(§8 기록값 일치). `--official`: `2026. 3. 22. 행사`·`금400,000원(금사십만원)`·'끝' 없음·시간 린트 1건(`오후 3시 20분` → `15:20`). 한글 재열람→PDF 1쪽 렌더 2건 육안 확인. 실행 전후 `Hwp.exe` 0개, 외부 한글 병행 0건. 발견: N19 |
+| 통합 | PASS | 사용자 결정 "병합 + push". `main` `--no-ff` 병합 `2353110`(292 tests OK), 전역 shim `--version` `2026.09.27+dev`·실제 `--preflight` exit 0, push `768e275..2353110`(13커밋·14파일, 원격 일치). exe 릴리스는 별도 결정 |
 
 - 단위 스위트 292 tests OK(skip 1, N16·N17 테스트 포함 — 1차 기록 284), `py_compile` 43개 OK, AST `global` 0건, GUI 하네스 7개 상태 exit 0 (2026-09-28, `45ffb38`)
 - 실COM 안전장치(`run_task7.py`, 저장소 밖): 단계마다 시작 전 `Hwp.exe` 잔존 시 중단, 단계 중 `Hwp.exe` 2개 이상이면 외부 한글로 보고 중단, 90초 초과·보안 모듈 경고 즉시 중단, 중단 시 자기 하위 파이썬만 종료(한글 프로세스·창 미조작), 재실행 오판 방지용 실행별 새 폴더

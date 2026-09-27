@@ -289,4 +289,4 @@ def _package(path, *, mimetype_first=True, broken_section=False, drop_rowcnt=Fal
   - `--official` 변환 → 산출물 본문에 `2026. 3. 22.`·`금400,000원(금사십만원)` 존재·"끝." 부재, 시간 린트 note 1건
   - 두 산출물 모두 자가검증 note 0건·안전 게이트 PASS, 한글 재열람·PDF 1쪽 렌더 육안 확인
 - [x] 기록: `IMPROVEMENT_PLAN.md` §11-11 웨이브 2 결과표, `verification-log.md`, 구현 명세 체크박스 → 커밋 `Track F: 웨이브 2 검증 결과 기록`
-- [ ] 통합: 브랜치 테스트 green 확인 후 사용자에게 병합·push 여부 확인(push는 L4)
+- [x] 통합: 브랜치 테스트 green 확인 후 사용자에게 병합·push 여부 확인(push는 L4)
