@@ -2691,8 +2691,11 @@ _STYLE_LINT_RULES = (
 )
 
 
-def lint_official_style(blocks):
-    """정본 §1-1 공공언어 순화·병렬('및') 경고를 반환한다(비강제, 텍스트 미수정)."""
+# 표기 린트 등급: 산출물 문제([확인 필요])와 구분해 로그에만 표시, GUI '확인 필요' 집계 제외(사용자 결정 2026-09-28)
+_NOTATION_TIER = '[표기 점검]'
+
+
+def _lint_texts(blocks, include_tables=False):
     texts = []
     for blk in blocks:
         if blk.get('type') in _STYLE_TEXT_TYPES:
@@ -2700,7 +2703,15 @@ def lint_official_style(blocks):
                 texts.append(blk['text'])
             if blk.get('value'):
                 texts.append(blk['value'])
-    combined = '\n'.join(texts)
+        elif include_tables and blk.get('type') == 'table':
+            for row in ([blk.get('header') or []] + (blk.get('rows') or [])):
+                texts.extend(str(cell) for cell in row if cell)
+    return texts
+
+
+def lint_official_style(blocks):
+    """정본 §1-1 공공언어 순화·병렬('및') 경고를 반환한다(비강제, 텍스트 미수정)."""
+    combined = '\n'.join(_lint_texts(blocks))
     notes = []
     for avoid, prefer, exclude in _STYLE_LINT_RULES:
         if exclude:
@@ -2709,9 +2720,9 @@ def lint_official_style(blocks):
         else:
             found = avoid in combined
         if found:
-            notes.append(f"[확인 필요] 공공언어 순화: '{avoid}' → '{prefer}' 권장 (정본 §1-1)")
+            notes.append(f"{_NOTATION_TIER} 공공언어 순화: '{avoid}' → '{prefer}' 권장 (정본 §1-1)")
     if '및' in combined:
-        notes.append("[확인 필요] '및' 사용 — '와/과/·'로 병렬관계 명확화 검토 (정본 §1-1)")
+        notes.append(f"{_NOTATION_TIER} '및' 사용 — '와/과/·'로 병렬관계 명확화 검토 (정본 §1-1)")
     return notes
 
 
@@ -2725,20 +2736,41 @@ def lint_money_notation(blocks):
     금액은 '천원'으로 줄이지 않고 아라비아 숫자로 적는다(예: 345,000원).
     예산액은 대부분 표 안에 나오므로 lint_official_style과 달리 표 셀까지 스캔한다.
     """
-    texts = []
-    for blk in blocks:
-        if blk.get('type') in _STYLE_TEXT_TYPES:
-            if blk.get('text'):
-                texts.append(blk['text'])
-            if blk.get('value'):
-                texts.append(blk['value'])
-        elif blk.get('type') == 'table':
-            for row in ([blk.get('header') or []] + (blk.get('rows') or [])):
-                texts.extend(str(cell) for cell in row if cell)
-    combined = '\n'.join(texts)
+    combined = '\n'.join(_lint_texts(blocks, include_tables=True))
     if _CHEONWON_PATTERN.search(combined):
-        return ["[확인 필요] 금액 표기: '천원' 축약 대신 아라비아 숫자로 (예: 345,000원) (정본 §1-2)"]
+        return [f"{_NOTATION_TIER} 금액 표기: '천원' 축약 대신 아라비아 숫자로 (예: 345,000원) (정본 §1-2)"]
     return []
+
+
+# '오후 3시 20분'·'14시 30분'·'오전 9시' — '2시간'(기간)은 제외. 정본 §1-2: 24시각제·시분 글자 생략·쌍점
+_TIME_EXPR_PATTERN = re.compile(r'(?:(오전|오후)\s*)?(?<!\d)(\d{1,2})\s*시(?!간)(?:\s*(\d{1,2})\s*분)?')
+
+
+def _suggest_24h(match):
+    meridiem, hour, minute = match.group(1), int(match.group(2)), int(match.group(3) or 0)
+    if meridiem == '오후' and hour < 12:
+        hour += 12
+    elif meridiem == '오전' and hour == 12:
+        hour = 0
+    return f'{hour}:{minute:02d}'
+
+
+def lint_official_time(blocks):
+    """정본 §1-2 시간 표기(24시각제·쌍점) 경고를 1건으로 요약해 반환한다(비강제, 텍스트 미수정)."""
+    hits = [
+        match
+        for text in _lint_texts(blocks, include_tables=True)
+        for match in _TIME_EXPR_PATTERN.finditer(text)
+        if int(match.group(2)) <= 24
+    ]
+    if not hits:
+        return []
+    first = hits[0]
+    more = ' 등' if len(hits) > 1 else ''
+    return [
+        f"{_NOTATION_TIER} 시간 표기 {len(hits)}건: '{first.group(0).strip()}' → '{_suggest_24h(first)}'{more}"
+        " — 24시각제·쌍점 표기 권장 (정본 §1-2)"
+    ]
 
 
 # ─── 변환 실행 ─────────────────────────────────────────────────────────────────
@@ -2881,6 +2913,7 @@ def convert_file(
             blocks = normalize_official_amounts(blocks)
             notes.extend(lint_official_style(blocks))
             notes.extend(lint_money_notation(blocks))
+            notes.extend(lint_official_time(blocks))
             if insert_end_mark:
                 blocks = append_end_mark_blocks(blocks)
         table_layouts = [

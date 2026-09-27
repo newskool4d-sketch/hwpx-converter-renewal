@@ -26,6 +26,8 @@ def note_log_tag(note: str) -> str:
         return "err"
     if note.startswith("[경고]"):
         return "warn"
+    if note.startswith("[표기 점검]"):
+        return "info"
     return "muted"
 
 

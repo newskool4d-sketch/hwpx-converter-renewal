@@ -8,6 +8,45 @@ def _has(notes, *needles):
     return any(all(n in note for n in needles) for note in notes)
 
 
+class NotationTierTests(unittest.TestCase):
+    """표기 린트는 [표기 점검] 등급 — GUI '확인 필요' 집계에서 제외(사용자 결정 2026-09-28)."""
+
+    def test_style_and_money_lints_use_notation_tier(self):
+        blocks = [{"type": "p", "text": "향후 계획 및 400천원 실시"}]
+        notes = converter.lint_official_style(blocks) + converter.lint_money_notation(blocks)
+        self.assertTrue(notes)
+        self.assertTrue(all(note.startswith("[표기 점검]") for note in notes), notes)
+
+
+class OfficialTimeLintTests(unittest.TestCase):
+    def _lint(self, text, table=False):
+        block = {"type": "table", "header": ["시간"], "rows": [[text]]} if table else {"type": "p", "text": text}
+        return converter.lint_official_time([block])
+
+    def test_pm_hour_minute_suggests_24h(self):
+        notes = self._lint("오후 3시 20분 개회")
+        self.assertEqual(len(notes), 1)
+        self.assertTrue(notes[0].startswith("[표기 점검]"), notes)
+        self.assertIn("'오후 3시 20분' → '15:20'", notes[0])
+
+    def test_am_hour_suggests_colon_form(self):
+        self.assertIn("'오전 9시' → '9:00'", self._lint("오전 9시 집결")[0])
+
+    def test_hour_minute_without_meridiem(self):
+        self.assertIn("'14시 30분' → '14:30'", self._lint("14시 30분 종료")[0])
+
+    def test_table_cells_are_scanned(self):
+        self.assertEqual(len(self._lint("오후 2시", table=True)), 1)
+
+    def test_duration_and_colon_form_are_not_flagged(self):
+        self.assertEqual(self._lint("2시간 교육, 15:20 개회"), [])
+
+    def test_multiple_hits_are_summarized_in_one_note(self):
+        notes = self._lint("오전 9시 집결, 오후 3시 해산")
+        self.assertEqual(len(notes), 1)
+        self.assertIn("2건", notes[0])
+
+
 class LintOfficialStyleTests(unittest.TestCase):
     def test_flags_geumil_suggests_oneul(self):
         # 정본 §1-1 순화: 금일 → 오늘
