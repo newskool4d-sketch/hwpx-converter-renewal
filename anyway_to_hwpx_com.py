@@ -2,7 +2,7 @@
 HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX 변환.
 확장자를 자동 감지하여 내부 blocks 구조로 정규화한 뒤 HWP COM으로 저장.
 """
-__version__ = '2026.09.27+dev'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
+__version__ = '2026.09.28'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
 
 from pathlib import Path
 import argparse
