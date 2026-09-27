@@ -161,5 +161,33 @@ class OutOfRangeMergeGuardTests(unittest.TestCase):
         self.assertEqual(len(root.findall(".//hp:tc", NS)), 5)
 
 
+class TablePostprocessNotesTests(unittest.TestCase):
+    """표 후처리 경고는 print가 아니라 반환 note로 전달돼야 GUI까지 도달한다."""
+
+    def test_out_of_range_merge_is_returned_as_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.hwpx"
+            write_hwpx(path, make_table_with_rows(rows=2, cols=3))
+            layout = {"header": ["a", "b", "c"], "rows": [["1", "2", "3"]], "merged_cells": [[0, 0, 1, 5]]}
+            notes = tpp.apply_table_layout_profiles(path, [layout])
+        self.assertEqual(notes, ["[경고] 격자 범위를 벗어난 병합 1건 무시"])
+
+    def test_unreadable_package_is_returned_as_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "broken.hwpx"
+            path.write_bytes(b"not a zip")
+            notes = tpp.apply_table_layout_profiles(path, [{"header": ["a"], "rows": [["1"]]}])
+        self.assertEqual(len(notes), 1)
+        self.assertTrue(notes[0].startswith("[경고] 표 후처리 준비 실패"))
+
+    def test_clean_table_returns_no_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "t.hwpx"
+            write_hwpx(path, make_table_with_rows(rows=2, cols=3))
+            layout = {"header": ["a", "b", "c"], "rows": [["1", "2", "3"]], "merged_cells": []}
+            notes = tpp.apply_table_layout_profiles(path, [layout])
+        self.assertEqual(notes, [])
+
+
 if __name__ == "__main__":
     unittest.main()
