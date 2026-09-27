@@ -246,3 +246,17 @@
 - 전역 shim: `to_hwpx_com.py --version` = `2026.09.27+dev`. `Hwp.exe` 0개 확인 후 실제 `--preflight` 1회 → exit 0, "HWP COM preflight OK: HWPFrame.HwpObject 생성 및 보안 모듈 등록 성공", 종료 후 `Hwp.exe` 0개.
 - push: `origin`(`newskool4d-sketch/hwpx-converter-renewal`) `768e275..2353110`, 13커밋·14파일, `git ls-remote` = 로컬 `2353110fb034d1e270f290cb0d5a134ec1530a57`.
 - 미실행: exe 재빌드·릴리스(GUI 사용자 반영은 별도 결정), 워크트리 `C:\tmp\hwpx-wave2` 유지.
+
+### 릴리스 `v2026.09.28` 발행 (2026-09-28, 사용자 지시 "exe 재빌드, v2026.09.28 발행, digest 비교")
+
+- 절차 1·2단계: `__version__` `2026.09.27+dev` → `2026.09.28`(`f99d58f`, 트리 `3faa915`), 292 tests OK(skip 1)·`py_compile` OK·`--version` = `2026.09.28`. 3단계(실변환·안전 게이트·한글 육안)는 웨이브 2 Task 7 + 아래 동결 exe 변환으로 충족.
+- 빌드: 작업 트리 `f99d58f`(추적 외 루트 `.py` 없음), `HWPX_GUI_PDF_STACK=full python -m PyInstaller --clean --noconfirm --distpath C:/tmp/hwpx-release-v20260928/dist --workpath C:/tmp/hwpx-release-v20260928/work anyway_to_hwpx_gui.spec` → exit 0, 경고 8건(v2026.09.27 빌드와 동일: UPX 미압축 3건·zipfs 경로 안내).
+- 산출물: 75,111,686 bytes, SHA-256 `74f689b36c4f52aacadf446d04f1ae1e4e481dd64b64977df808b591620e43c2`. 판독(`diag_exe_wave2.py`): `_tcl_data` 839·`_tk_data` 90개, 내장 pyc 4종에 웨이브 2 표지(버전 `2026.09.28`·보안 모듈 등록·자가검증·시간 린트·문서 유형 컨트롤) 존재, `2026.09.27+dev` 부재.
+- 4단계 기동 확인 3회: 메인 창 `TkTopLevel` "HWPX 변환기 2026.09.28" 32.5s·21.2s·21.5s, `#32770` 없음, `WM_CLOSE` exit 0, 5초 유지 1회, 잔여 프로세스 없음. (첫 실행 묶음은 도구 출력 파일이 다른 세션 정리로 유실돼 판정에서 제외)
+- 동결 exe GUI 변환(화면 조작, 앱 접근 승인: 발행 후보 exe·한글 2020): `Hwp.exe` 0개 확인 → "파일 추가"로 `C:\tmp\hwpx-release-v20260928\gui-test\w2_official.md`·`w2_sihaengmun.md` → 저장 폴더 자동 지정 → 문서 유형 "시행문(1.부터)" + "공문 표기 정규화" 선택('끝' 해제) → "변환 시작". 로그: `HWP 실행 중...` 다음 보안 모듈 경고 없음, 완료 2건, `[표기 점검]` 2건(시간 표기 `오후 3시 20분` → `15:20`, 공공언어 `실시`, 파랑), 상태 "전체 변환 완료: 2개", 대화상자 "변환 완료"(확인 필요 아님) → "아니요". `C:\tmp` 경로 저장에도 파일 접근 확인 창 없음(N16 동결 환경 확인). 창 `WM_CLOSE` 후 exe·한글 잔여 없음.
+- 산출물 검증(`verify_release_gui.py`) 15/15 PASS: 자가검증 0건·편집기 안전 게이트 2/2, `2026. 3. 22. 행사`·`금400,000원(금사십만원)`·'끝' 없음, 시행문 `hc:left` 620·960, 한글 재열람(창 표시)→PDF 2/2, 1쪽 렌더 육안 확인(Task 7 CLI 결과와 동일, N19 빈 단락 동일).
+- 진행 중 사건: 창 전면 전환(`open_application`)이 이전 세션 승인 경로의 v2026.09.27 시험 사본(`C:\tmp\hwpx-gui-tcl9-spike\dist\…`)을 새로 실행 → 대기 상태에서 PID 지정 `WM_CLOSE`로 정상 종료. 화면 조작 도구의 경로 입력이 클립보드를 경유(사용자 클립보드 내용 교체).
+- push: `2353110..f99d58f`(2커밋·4파일, 변경 내용·커밋 메시지·발행 노트 개인 경로·계정·시크릿 0건), `git ls-remote` = 로컬 `f99d58fe2689115fffbdef476523c8f47448773b`.
+- `gh release create v2026.09.28 <C:/tmp/hwpx-release-v20260928/dist 자산> --target f99d58f… --title "Anyway to HWPX GUI (2026-09-28)" --notes-file tests/out/track-f/release_notes_v3.md --latest`(업로드 직전 재해시 일치).
+- 사후: API 자산 `digest` = `sha256:74f689b3…43c2`(로컬 일치, DIGEST MATCH), size 75,111,686, state uploaded / 태그 → `f99d58f` / draft·prerelease false / 목록상 Latest / `19806ca`(E-7) 조상 확인 / `git ls-files dist` 비어 있음.
+- 로컬 `dist/anyway_to_hwpx_gui.exe`는 사용자 승인으로 같은 빌드로 교체(원본·대상 해시 사전 대조: `53ebe077…` → `74f689b3…`, ignored).
