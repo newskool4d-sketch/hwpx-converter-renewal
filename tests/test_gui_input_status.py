@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
+import gui_input_status
+from gui_conversion_worker import note_log_tag
 from gui_file_intake import add_input_paths
 from gui_input_status import report_input_result
 
@@ -44,6 +47,46 @@ class GuiInputStatusTests(unittest.TestCase):
 
         self.assertIn("거부 1개", app.status.value)
         self.assertEqual(app.logs, [(app.status.value, "err")])
+
+
+class _Progress:
+    def configure(self, **kwargs):
+        self.config = kwargs
+
+
+class _FinishApp(_App):
+    def __init__(self) -> None:
+        super().__init__()
+        self.progress = _Progress()
+        self.output_dir = _Value()
+        self.busy_states: list[bool] = []
+
+    def _set_busy(self, busy: bool) -> None:
+        self.busy_states.append(busy)
+
+
+class FinishConversionTests(unittest.TestCase):
+    def test_note_tags_follow_prefix_severity(self) -> None:
+        self.assertEqual(note_log_tag("[확인 필요] Markdown 이미지 1개 미삽입"), "err")
+        self.assertEqual(note_log_tag("[경고] 줄 간격 후처리 실패: x"), "warn")
+        self.assertEqual(note_log_tag("[참고] 표 열 너비"), "muted")
+
+    def test_warned_files_produce_warning_summary_instead_of_plain_success(self) -> None:
+        app = _FinishApp()
+        with patch.object(gui_input_status.messagebox, "askyesno", return_value=False) as ask:
+            gui_input_status.finish_conversion(app, 2, [], ["a.md"])
+
+        self.assertIn("확인 필요 1개", app.status.value)
+        self.assertEqual(ask.call_args.args[0], "변환 완료(확인 필요)")
+        self.assertIn("a.md", ask.call_args.args[1])
+
+    def test_clean_run_keeps_plain_success_dialog(self) -> None:
+        app = _FinishApp()
+        with patch.object(gui_input_status.messagebox, "askyesno", return_value=False) as ask:
+            gui_input_status.finish_conversion(app, 2, [], [])
+
+        self.assertEqual(app.status.value, "전체 변환 완료: 2개")
+        self.assertEqual(ask.call_args.args[0], "변환 완료")
 
 
 if __name__ == "__main__":

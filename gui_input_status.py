@@ -35,7 +35,14 @@ def report_input_result(app, result) -> None:
     app._append_log(visible_summary, tag)
 
 
-def finish_conversion(app, completed, failures) -> None:
+def _offer_output_folder(app, title: str, message: str) -> None:
+    if messagebox.askyesno(title, message):
+        out_dir = app.output_dir.get().strip()
+        if out_dir and os.path.isdir(out_dir):
+            os.startfile(out_dir)
+
+
+def finish_conversion(app, completed, failures, warned=()) -> None:
     app.progress.configure(value=completed)
     app._set_busy(False)
     if failures:
@@ -52,13 +59,18 @@ def finish_conversion(app, completed, failures) -> None:
             + "\n".join(lines)
             + "\n\n자세한 내용은 로그를 확인하세요.",
         )
+    elif warned:
+        app.status.set(f"변환 완료 {completed}개 · 확인 필요 {len(warned)}개 — 로그를 확인하세요")
+        lines = [f"• {name}" for name in warned[:5]]
+        if len(warned) > 5:
+            lines.append(f"... 외 {len(warned) - 5}개")
+        _offer_output_folder(
+            app,
+            "변환 완료(확인 필요)",
+            f"{completed}개 파일을 변환했습니다. 다음 파일에 경고가 있습니다.\n\n"
+            + "\n".join(lines)
+            + "\n\n로그에서 내용을 확인하세요. 저장 폴더를 열까요?",
+        )
     else:
         app.status.set(f"전체 변환 완료: {completed}개")
-        open_folder = messagebox.askyesno(
-            "변환 완료",
-            f"{completed}개 파일을 변환했습니다.\n저장 폴더를 열까요?",
-        )
-        if open_folder:
-            out_dir = app.output_dir.get().strip()
-            if out_dir and os.path.isdir(out_dir):
-                os.startfile(out_dir)
+        _offer_output_folder(app, "변환 완료", f"{completed}개 파일을 변환했습니다.\n저장 폴더를 열까요?")

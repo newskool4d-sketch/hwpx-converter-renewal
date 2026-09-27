@@ -15,9 +15,18 @@ Failure: TypeAlias = tuple[str, BaseException]
 ConversionMessage: TypeAlias = (
     tuple[str, int, int, str]
     | tuple[str, str, str | None]
-    | tuple[str, int, list[Failure]]
+    | tuple[str, int, list[Failure], list[str]]
 )
 MessageSink: TypeAlias = Callable[[ConversionMessage], None]
+_WARNING_PREFIXES = ("[경고]", "[확인 필요]")
+
+
+def note_log_tag(note: str) -> str:
+    if note.startswith("[확인 필요]"):
+        return "err"
+    if note.startswith("[경고]"):
+        return "warn"
+    return "muted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,6 +42,7 @@ def run_conversion(snapshot: ConversionSnapshot, message_sink: MessageSink) -> N
     pythoncom.CoInitialize()
     hwp = None
     failures: list[Failure] = []
+    warned: list[str] = []
     completed = 0
     total = len(snapshot.files)
     try:
@@ -61,9 +71,11 @@ def run_conversion(snapshot: ConversionSnapshot, message_sink: MessageSink) -> N
                 completed += 1
                 message_sink(("progress", completed, total, src_path.name))
                 message_sink(("log", f"완료: {out_path.name}", "ok"))
-                for note in (result or {}).get("notes", []):
-                    tag = "err" if note.startswith("[확인 필요]") else "muted"
-                    message_sink(("log", note, tag))
+                notes = (result or {}).get("notes", [])
+                for note in notes:
+                    message_sink(("log", note, note_log_tag(note)))
+                if any(note.startswith(_WARNING_PREFIXES) for note in notes):
+                    warned.append(src_path.name)
             except Exception as exc:  # noqa: BLE001,BROAD_EXCEPT_OK
                 failures.append((src, exc))
                 message_sink(("log", f"실패: {Path(src).name} — {exc}", "err"))
@@ -77,4 +89,4 @@ def run_conversion(snapshot: ConversionSnapshot, message_sink: MessageSink) -> N
             except Exception:  # noqa: BLE001,BROAD_EXCEPT_OK
                 pass
         pythoncom.CoUninitialize()
-        message_sink(("done", completed, failures))
+        message_sink(("done", completed, failures, warned))

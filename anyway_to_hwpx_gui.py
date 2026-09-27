@@ -239,13 +239,13 @@ class ConverterApp(BaseTk):
                     if done < total:
                         self.status.set(f"변환 중: {name}  ({done + 1}/{total})")
                 elif msg[0] == "done":
-                    self._finish_conversion(msg[1], msg[2])
+                    self._finish_conversion(msg[1], msg[2], msg[3])
         except queue.Empty:
             pass
         self.after(100, self._poll_messages)
 
-    def _finish_conversion(self, completed, failures):
-        finish_conversion(self, completed, failures)
+    def _finish_conversion(self, completed, failures, warned=()):
+        finish_conversion(self, completed, failures, warned)
 
     def _refresh_file_list(self):
         self.file_list.delete(0, tk.END)
