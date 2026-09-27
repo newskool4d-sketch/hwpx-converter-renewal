@@ -45,7 +45,7 @@ from hwpx_layout import (
 )
 from table_grid import SourceCell, block_rows_from_grid, expand_spanned_rows
 from table_hwpx_postprocess import apply_table_layout_profiles as _apply_table_layout_profiles_new
-from table_hwpx_styles import serialize_hwpml_part
+from table_hwpx_styles import HWPML_ROOT_NAMESPACES, serialize_hwpml_part
 from table_model import table_layout_for
 
 
@@ -2773,6 +2773,51 @@ def lint_official_time(blocks):
     ]
 
 
+# ─── 산출물 자가검증 (변환 직후, 표준 라이브러리) ────────────────────────────────
+
+_SECTION_PART_RE = re.compile(r'Contents/section\d+\.xml')
+_ROOT_OPEN_TAG_RE = re.compile(rb'<(?![?!])[^>]*>')
+
+
+def self_check_hwpx(hwpx_path):
+    """변환 직후 산출물의 구조 이상을 [확인 필요] note 목록으로 반환한다.
+
+    ZIP·mimetype·XML 파싱·루트 선언(정품 한컴 15종)·표 rowCnt/colCnt만 가볍게 본다.
+    편집기 안전성 게이트(scripts/hwpx_editor_safety_gate.py)를 대체하지 않는다.
+    """
+    problems = []
+    try:
+        package = zipfile.ZipFile(hwpx_path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        return [f'[확인 필요] 산출물 자가검증: HWPX(ZIP)를 열 수 없음 — {exc}']
+    with package:
+        entries = package.infolist()
+        if not entries or entries[0].filename != 'mimetype' or entries[0].compress_type != zipfile.ZIP_STORED:
+            problems.append('mimetype이 첫 엔트리·무압축이 아님')
+        for entry in entries:
+            if not entry.filename.endswith(('.xml', '.hpf')):
+                continue
+            data = package.read(entry.filename)
+            try:
+                root = ET.fromstring(data)
+            except ET.ParseError as exc:
+                problems.append(f'{entry.filename} XML 파싱 실패({exc})')
+                continue
+            is_section = bool(_SECTION_PART_RE.fullmatch(entry.filename))
+            if is_section or entry.filename == 'Contents/header.xml':
+                open_tag = _ROOT_OPEN_TAG_RE.search(data)
+                declared = open_tag.group(0) if open_tag else b''
+                missing = [prefix for prefix in HWPML_ROOT_NAMESPACES if f'xmlns:{prefix}="'.encode() not in declared]
+                if missing:
+                    more = '…' if len(missing) > 3 else ''
+                    problems.append(f'{entry.filename} 루트 네임스페이스 {len(missing)}종 누락({", ".join(missing[:3])}{more})')
+            if is_section and any(
+                not tbl.get('rowCnt') or not tbl.get('colCnt') for tbl in root.iter(f'{{{_NS_HP}}}tbl')
+            ):
+                problems.append(f'{entry.filename} 표 rowCnt/colCnt 누락')
+    return [f'[확인 필요] 산출물 자가검증: {problem}' for problem in problems]
+
+
 # ─── 변환 실행 ─────────────────────────────────────────────────────────────────
 
 def build_output_path(src_path, output_dir):
@@ -2965,6 +3010,7 @@ def convert_file(
             time.sleep(0.3)
         if rendered_layout:
             notes.extend(pop_conversion_notes())
+            notes.extend(self_check_hwpx(out))
             return {'notes': notes}
         if diagnose_stage:
             diagnose_stage('postprocess')
@@ -2975,6 +3021,7 @@ def convert_file(
         apply_official_line_spacing(out)
         apply_official_paragraph_spacing(out)
         notes.extend(pop_conversion_notes())  # 빌드·후처리 단계 note 합류
+        notes.extend(self_check_hwpx(out))
         if diagnose_stage:
             diagnose_stage('finalize')
         return {'notes': notes}

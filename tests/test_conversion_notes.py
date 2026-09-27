@@ -2,10 +2,12 @@ import contextlib
 import io
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
 import anyway_to_hwpx_com as converter
+from table_hwpx_styles import HWPML_ROOT_NAMESPACES
 
 
 class _FakeDocument:
@@ -222,6 +224,72 @@ class OfficialNormalizationTests(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertTrue(convert.call_args.kwargs["official"])
         self.assertEqual(convert.call_args.kwargs["doc_type"], "sihaengmun")
+
+
+def _package(path, *, mimetype_first=True, broken_section=False, drop_rowcnt=False, bare_header=False):
+    ns = " ".join(f'xmlns:{p}="{u}"' for p, u in HWPML_ROOT_NAMESPACES.items())
+    decl = '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'
+    tbl = '<hp:tbl colCnt="1"/>' if drop_rowcnt else '<hp:tbl rowCnt="1" colCnt="1"/>'
+    section = f"{decl}<hs:sec {ns}><hp:p>{tbl}</hp:p></hs:sec>"
+    if broken_section:
+        section = section.replace("</hs:sec>", "")
+    header_ns = f'xmlns:hh="{HWPML_ROOT_NAMESPACES["hh"]}"' if bare_header else ns
+    header = f"{decl}<hh:head {header_ns}/>"
+    entries = [
+        ("mimetype", "application/hwp+zip", zipfile.ZIP_STORED),
+        ("Contents/header.xml", header, zipfile.ZIP_DEFLATED),
+        ("Contents/section0.xml", section, zipfile.ZIP_DEFLATED),
+    ]
+    if not mimetype_first:
+        entries.append(entries.pop(0))
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, text, method in entries:
+            zf.writestr(zipfile.ZipInfo(name), text, compress_type=method)
+
+
+class SelfCheckTests(unittest.TestCase):
+    def _check(self, **kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.hwpx"
+            _package(path, **kwargs)
+            return converter.self_check_hwpx(path)
+
+    def _assert_flagged(self, notes, needle):
+        self.assertTrue(notes, "자가검증이 문제를 보고해야 함")
+        self.assertTrue(all(n.startswith("[확인 필요] 산출물 자가검증") for n in notes), notes)
+        self.assertTrue(any(needle in n for n in notes), notes)
+
+    def test_clean_package_has_no_findings(self):
+        self.assertEqual(self._check(), [])
+
+    def test_mimetype_must_be_first_and_stored(self):
+        self._assert_flagged(self._check(mimetype_first=False), "mimetype")
+
+    def test_broken_xml_is_reported(self):
+        self._assert_flagged(self._check(broken_section=True), "section0.xml")
+
+    def test_table_without_rowcnt_is_reported(self):
+        self._assert_flagged(self._check(drop_rowcnt=True), "rowCnt")
+
+    def test_missing_root_namespaces_are_reported(self):
+        self._assert_flagged(self._check(bare_header=True), "네임스페이스")
+
+    def test_non_zip_output_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "out.hwpx"
+            path.write_bytes(b"saved")
+            self._assert_flagged(converter.self_check_hwpx(path), "ZIP")
+
+    def test_convert_file_appends_self_check_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "s.md"
+            source.write_text("본문", encoding="utf-8")
+            with (
+                patch.object(converter, "build_doc", return_value=None),
+                patch.object(converter.time, "sleep", return_value=None),
+            ):
+                result = converter.convert_file(_FakeHwp(), source, Path(tmp) / "s.hwpx")
+        self.assertTrue(any(n.startswith("[확인 필요] 산출물 자가검증") for n in result["notes"]), result["notes"])
 
 
 class VersionTests(unittest.TestCase):
