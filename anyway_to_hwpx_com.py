@@ -1722,7 +1722,39 @@ def _com_call(fn, retries=3, delay=1.0):
                 raise
 
 
-def create_hwp_object(visible=True):
+_SECURITY_MODULE_KEY = r'Software\HNC\HwpAutomation\Modules'
+_DEFAULT_SECURITY_MODULE = 'SecurityModule'  # 기존 관례 이름 — 레지스트리 등록 이름이 모두 실패할 때 마지막으로 시도
+_SECURITY_MODULE_WARNING = (
+    '[확인 필요] 한글 보안 모듈 등록 실패 — 저장·열기 때 한글이 파일 접근 허용을 물어 무인 실행이 멈출 수 있음 '
+    r'(HKCU\Software\HNC\HwpAutomation\Modules 등록 확인)'
+)
+
+
+def _registered_security_modules():
+    """HKCU에 등록된 한글 자동화 보안 모듈 값 이름(읽기 전용). 없거나 읽을 수 없으면 빈 목록."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _SECURITY_MODULE_KEY) as key:
+            return [winreg.EnumValue(key, index)[0] for index in range(winreg.QueryInfoKey(key)[1])]
+    except (ImportError, OSError):
+        return []
+
+
+def register_security_module(hwp):
+    """한글 자동화 보안 모듈 등록 — 레지스트리에 실제 등록된 이름을 먼저, 관례 이름을 마지막에 시도(N16).
+
+    반환: 등록에 성공한 모듈 이름. 모두 실패하면 None(파일 접근 때 한글 확인 창이 뜰 수 있음).
+    """
+    for name in dict.fromkeys(_registered_security_modules() + [_DEFAULT_SECURITY_MODULE]):
+        try:
+            if hwp.RegisterModule('FilePathCheckDLL', name):
+                return name
+        except Exception:  # noqa: BLE001 — 이름별 시도, 전부 실패하면 None으로 보고
+            continue
+    return None
+
+
+def create_hwp_object(visible=True, warn=None):
     try:
         import win32com.client
     except ImportError as exc:
@@ -1730,7 +1762,8 @@ def create_hwp_object(visible=True):
 
     try:
         hwp = win32com.client.Dispatch('HWPFrame.HwpObject')
-        hwp.RegisterModule('FilePathCheckDLL', 'SecurityModule')
+        if register_security_module(hwp) is None and warn is not None:
+            warn(_SECURITY_MODULE_WARNING)
         hwp.XHwpWindows.Item(0).Visible = visible
         return hwp
     except Exception as exc:
@@ -1739,9 +1772,12 @@ def create_hwp_object(visible=True):
 
 def _run_hwp_preflight_worker(visible=False):
     hwp = None
+    problems = []
     try:
-        hwp = create_hwp_object(visible=visible)
-        return 'HWP COM preflight OK: HWPFrame.HwpObject 생성 및 SecurityModule 등록 성공'
+        hwp = create_hwp_object(visible=visible, warn=problems.append)
+        if problems:
+            raise RuntimeError(problems[0])
+        return 'HWP COM preflight OK: HWPFrame.HwpObject 생성 및 보안 모듈 등록 성공'
     finally:
         if hwp is not None:
             try:
@@ -3113,7 +3149,7 @@ def main(argv=None):
         prepared_output_dir = prepare_output_dir(args.output_dir, args.empty_output_folder) if args.output_dir else None
         print('HWP 실행 중...')
         try:
-            hwp = create_hwp_object(visible=True)
+            hwp = create_hwp_object(visible=True, warn=lambda message: print(f'  {message}', file=sys.stderr))
         except Exception as exc:
             print(f'[FAIL] {exc}', file=sys.stderr)
             return 2

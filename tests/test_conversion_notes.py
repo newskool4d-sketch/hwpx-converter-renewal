@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import anyway_to_hwpx_com as converter
@@ -294,6 +295,69 @@ class SelfCheckTests(unittest.TestCase):
             ):
                 result = converter.convert_file(_FakeHwp(), source, Path(tmp) / "s.hwpx")
         self.assertTrue(any(n.startswith("[확인 필요] 산출물 자가검증") for n in result["notes"]), result["notes"])
+
+
+class _RegisteringHwp:
+    """RegisterModule 호출을 기록하고 허용된 이름에만 True를 돌려주는 COM 대역."""
+
+    def __init__(self, accepted=()):
+        self.accepted = set(accepted)
+        self.register_calls = []
+        self.XHwpWindows = SimpleNamespace(Item=lambda _index: SimpleNamespace(Visible=None))
+
+    def RegisterModule(self, module_type, module_name):
+        self.register_calls.append((module_type, module_name))
+        return module_name in self.accepted
+
+    def Quit(self):
+        return None
+
+
+class SecurityModuleRegistrationTests(unittest.TestCase):
+    """N16: 레지스트리에 실제 등록된 이름으로 보안 모듈을 등록하고, 실패를 숨기지 않는다."""
+
+    def test_registers_name_found_in_registry_first(self):
+        hwp = _RegisteringHwp(accepted={"FilePathCheckerModule"})
+        with patch.object(converter, "_registered_security_modules", return_value=["FilePathCheckerModule"]):
+            self.assertEqual(converter.register_security_module(hwp), "FilePathCheckerModule")
+        self.assertEqual(hwp.register_calls[0], ("FilePathCheckDLL", "FilePathCheckerModule"))
+
+    def test_falls_back_to_conventional_name(self):
+        hwp = _RegisteringHwp(accepted={"SecurityModule"})
+        with patch.object(converter, "_registered_security_modules", return_value=[]):
+            self.assertEqual(converter.register_security_module(hwp), "SecurityModule")
+
+    def test_returns_none_when_every_attempt_fails(self):
+        hwp = _RegisteringHwp()
+        with patch.object(converter, "_registered_security_modules", return_value=["FilePathCheckerModule"]):
+            self.assertIsNone(converter.register_security_module(hwp))
+        self.assertEqual([call[1] for call in hwp.register_calls], ["FilePathCheckerModule", "SecurityModule"])
+
+    def test_create_hwp_object_warns_when_registration_fails(self):
+        warnings = []
+        with (
+            patch("win32com.client.Dispatch", return_value=_RegisteringHwp()),
+            patch.object(converter, "_registered_security_modules", return_value=[]),
+        ):
+            converter.create_hwp_object(visible=False, warn=warnings.append)
+        self.assertEqual(len(warnings), 1)
+        self.assertTrue(warnings[0].startswith("[확인 필요] 한글 보안 모듈 등록 실패"), warnings)
+
+    def test_preflight_fails_honestly_when_registration_fails(self):
+        with (
+            patch("win32com.client.Dispatch", return_value=_RegisteringHwp()),
+            patch.object(converter, "_registered_security_modules", return_value=[]),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                converter._run_hwp_preflight_worker()
+        self.assertIn("보안 모듈 등록 실패", str(raised.exception))
+
+    def test_preflight_succeeds_only_after_real_registration(self):
+        with (
+            patch("win32com.client.Dispatch", return_value=_RegisteringHwp(accepted={"FilePathCheckerModule"})),
+            patch.object(converter, "_registered_security_modules", return_value=["FilePathCheckerModule"]),
+        ):
+            self.assertIn("preflight OK", converter._run_hwp_preflight_worker())
 
 
 class VersionTests(unittest.TestCase):

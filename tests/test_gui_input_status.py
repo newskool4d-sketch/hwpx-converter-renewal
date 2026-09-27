@@ -98,6 +98,28 @@ class FinishConversionTests(unittest.TestCase):
         self.assertEqual(messages[-1], ("done", 1, [], []))
         self.assertIn(("log", "[표기 점검] '및' 사용", "info"), messages)
 
+    def test_security_module_warning_reaches_log(self) -> None:  # N16
+        warning = "[확인 필요] 한글 보안 모듈 등록 실패 — 테스트"
+
+        def fake_create(visible=True, warn=None):
+            if warn is not None:
+                warn(warning)
+            return _QuitOnlyHwp()
+
+        messages = []
+        snapshot = worker.ConversionSnapshot(
+            files=(), output_dir="out", empty_output_folder=False, insert_end_mark=False, pdf_mode="layout"
+        )
+        with (
+            patch.object(worker.pythoncom, "CoInitialize"),
+            patch.object(worker.pythoncom, "CoUninitialize"),
+            patch.object(worker.time, "sleep"),
+            patch.object(worker.converter, "prepare_output_dir", return_value=Path("out")),
+            patch.object(worker.converter, "create_hwp_object", side_effect=fake_create),
+        ):
+            worker.run_conversion(snapshot, messages.append)
+        self.assertIn(("log", warning, "err"), messages)
+
     def test_warned_files_produce_warning_summary_instead_of_plain_success(self) -> None:
         app = _FinishApp()
         with patch.object(gui_input_status.messagebox, "askyesno", return_value=False) as ask:
