@@ -175,3 +175,15 @@
 - GREEN: `configure_pdf_page_setup()`(anyway_to_hwpx_com.py)을 `hwp.HParameterSet.HSecDef` 속성 접근 패턴으로 재작성. 재실행 시 16/16 green.
 - 회귀 확인: `python -m unittest discover -s tests` → 243 passed, 1 skipped(변경 없음).
 - 실COM 재검증: `HWPX_RUN_COM_TESTS=1 python -m unittest discover -s tests -p "test_pdf_hwp_com_integration.py"` → **ok**(1 test, 1584.6s). **이 테스트가 생성된 이래 최초로 통과** — round-trip 위치 어긋남 결함 완전 해소 확인.
+
+## 2026-09-27 Track F 웨이브 1 — 경고 가시화(F-2)·배포 정상화 준비(F-1)
+
+- TDD: Task 1~6 각각 RED(예상 사유 확인) → GREEN. `python -m unittest discover -s tests` → **258 tests OK, skipped=1**(skip = `HWPX_RUN_COM_TESTS` 미설정 COM 게이트, bs4 4.14.3 설치 확인).
+- `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py table_hwpx_postprocess.py gui_conversion_worker.py gui_input_status.py`: pass. 경고 `print` 잔존 0곳(grep).
+- GUI 상태 하네스 7개 상태(`--hold-seconds 0.2`): 전부 exit 0.
+- `--preflight`: OK. 실COM 변환 `tests/out/track-f/wave1_check.md --insert-end-mark`(표 2개·alt 이미지 1개·링크 1개): exit 0, stderr note 3건 각 1회 — `[확인 필요] Markdown 이미지 1개 미삽입`, `[참고] Markdown 링크 1개`, `[참고] 표 열 너비 … TableColWidth 미지원`(표 2개에 1회), `[경고]` 0건.
+- `scripts/hwpx_editor_safety_gate.py`: PASS(경고 1건 — manifest version part 미참조, 기존과 동일).
+- 실물 검증 스크립트(산출물 XML + 한글 `Open(path,'HWPX','')` → `SaveAs(pdf,'PDF','')` → PyMuPDF 1쪽 렌더) 11/11 PASS: mimetype 첫 엔트리 STORED, alt·URL 부재, 여백 7087/5669/7087/7087/2835/2835, 본문 참조 paraPr(20~23) 줄 간격 160%, 표 2개 rowCnt/colCnt·머리글 header=1, 재열람·PDF 저장 성공. 렌더 PNG 육안 확인(글리프·여백·표 음영·이중선 정상).
+  - 최초 판정에서 줄 간격 1건 FAIL은 검증 기준 오류였음: 미사용 기본 스타일 paraPr(9·10·11·19)의 switch 내부 값 150/130을 포함해 판정. 본문 참조 paraPr 기준으로 교정 후 PASS. 후처리가 직계 `lineSpacing`만 갱신하는 동작은 기록(렌더 영향 없음).
+- 릴리스 후보 판독(실행 없음): 디스크 exe blob `2a61e81` = `c5438a8` 추적 blob, 73,746,447 bytes, SHA-256 `9369b286f1ed9bf23fe57c1f994181522ce151068820c57f6e8888554e818824`. CArchive 항목 `anyway_to_hwpx_com.pyc`(PYZ 아님) 역직렬화 결과 `HSecDef` 포함 → E-7 수정 반영 확인.
+- NOT_RUN: 실COM PDF layout 통합 테스트(약 26분) — layout 경로 변경은 note 합류 1줄, 단위 테스트로 확인.

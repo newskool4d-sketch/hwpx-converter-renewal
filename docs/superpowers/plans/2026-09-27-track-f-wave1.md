@@ -32,7 +32,7 @@
 **Interfaces:**
 - Produces: `table_hwpx_postprocess.apply_table_layout_profiles(hwpx_path, table_layouts) -> list[str]`, `apply_table_width_profiles(...) -> list[str]` — 경고 note 목록(없으면 `[]`)
 
-- [ ] **Step 1: 실패 테스트 작성** — `tests/test_table_merge_postprocess.py` 끝(`if __name__` 앞)에 추가
+- [x] **Step 1: 실패 테스트 작성** — `tests/test_table_merge_postprocess.py` 끝(`if __name__` 앞)에 추가
 
 ```python
 class TablePostprocessNotesTests(unittest.TestCase):
@@ -61,9 +61,9 @@ class TablePostprocessNotesTests(unittest.TestCase):
         self.assertEqual(notes, [])
 ```
 
-- [ ] **Step 2: 실패 확인** — `python -m unittest tests.test_table_merge_postprocess.TablePostprocessNotesTests -v` → 3건 FAIL(`None != [...]`)
+- [x] **Step 2: 실패 확인** — `python -m unittest tests.test_table_merge_postprocess.TablePostprocessNotesTests -v` → 3건 FAIL(`None != [...]`)
 
-- [ ] **Step 3: 최소 구현** — `table_hwpx_postprocess.py`
+- [x] **Step 3: 최소 구현** — `table_hwpx_postprocess.py`
 
 ```python
 def apply_table_layout_profiles(hwpx_path, table_layouts: Sequence[TableLayout | TableBlock]) -> list[str]:
@@ -90,9 +90,9 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
 
 `import sys`(6행) 삭제.
 
-- [ ] **Step 4: 통과 확인** — 같은 명령 → 3건 PASS, 이어서 `python -m unittest tests.test_table_merge_postprocess -v` 전체 PASS
+- [x] **Step 4: 통과 확인** — 같은 명령 → 3건 PASS, 이어서 `python -m unittest tests.test_table_merge_postprocess -v` 전체 PASS
 
-- [ ] **Step 5: 커밋** — `git add table_hwpx_postprocess.py tests/test_table_merge_postprocess.py` / 메시지 `Track F: 표 후처리 경고를 note 목록으로 반환 (F-2a)`
+- [x] **Step 5: 커밋** — `git add table_hwpx_postprocess.py tests/test_table_merge_postprocess.py` / 메시지 `Track F: 표 후처리 경고를 note 목록으로 반환 (F-2a)`
 
 ---
 
@@ -106,7 +106,7 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
 - Consumes: Task 1의 `list[str]` 반환
 - Produces: `convert_file(...)['notes']`에 파싱·린트·빌드·후처리 note가 이 순서로 모두 포함 / `_add_conversion_note`는 수집만 하고 출력하지 않음(CLI 출력은 `main`이 파일별 1회)
 
-- [ ] **Step 1: 실패 테스트 작성** — `tests/test_conversion_notes.py` 신설
+- [x] **Step 1: 실패 테스트 작성** — `tests/test_conversion_notes.py` 신설
 
 ```python
 import contextlib
@@ -204,9 +204,9 @@ if __name__ == "__main__":
     unittest.main()
 ```
 
-- [ ] **Step 2: 실패 확인** — `python -m unittest tests.test_conversion_notes -v` → 2건 FAIL(경고 누락 / 노트 2회 출력)
+- [x] **Step 2: 실패 확인** — `python -m unittest tests.test_conversion_notes -v` → 2건 FAIL(경고 누락 / 노트 2회 출력)
 
-- [ ] **Step 3: 최소 구현** — `anyway_to_hwpx_com.py`
+- [x] **Step 3: 최소 구현** — `anyway_to_hwpx_com.py`
 
 ```python
 def _add_conversion_note(message):
@@ -246,9 +246,9 @@ def apply_table_layout_profiles(hwpx_path, table_layouts):
         return {'notes': notes}
 ```
 
-- [ ] **Step 4: 통과 확인** — `python -m unittest tests.test_conversion_notes -v` PASS → `python -m unittest discover -s tests` 전체 PASS(기존 243 + 신규, skip 1)
+- [x] **Step 4: 통과 확인** — `python -m unittest tests.test_conversion_notes -v` PASS → `python -m unittest discover -s tests` 전체 PASS(기존 243 + 신규, skip 1)
 
-- [ ] **Step 5: 커밋** — `git add anyway_to_hwpx_com.py tests/test_conversion_notes.py` / 메시지 `Track F: 후처리 경고를 note 수집 경로로 통합, CLI 중복 출력 제거 (F-2a)`
+- [x] **Step 5: 커밋** — `git add anyway_to_hwpx_com.py tests/test_conversion_notes.py` / 메시지 `Track F: 후처리 경고를 note 수집 경로로 통합, CLI 중복 출력 제거 (F-2a)`
 
 ---
 
@@ -261,7 +261,7 @@ def apply_table_layout_profiles(hwpx_path, table_layouts):
 **Interfaces:**
 - Produces: `insert_table(..., merged_cells=None, try_col_width=True) -> bool` — `TableColWidth` 액션 사용 가능 여부(미시도·정상 시 `True`, 액션이 `None`이면 `False`)
 
-- [ ] **Step 1: 실패 테스트 작성** — `tests/test_conversion_notes.py`에 추가
+- [x] **Step 1: 실패 테스트 작성** — `tests/test_conversion_notes.py`에 추가
 
 ```python
 class _Action:
@@ -343,9 +343,9 @@ class TableColWidthNoteTests(unittest.TestCase):
         self.assertIn("[경고] 열 너비 조정 실패: COM 오류", notes)
 ```
 
-- [ ] **Step 2: 실패 확인** — `python -m unittest tests.test_conversion_notes.TableColWidthNoteTests -v` → FAIL(요청 2회·note 없음)
+- [x] **Step 2: 실패 확인** — `python -m unittest tests.test_conversion_notes.TableColWidthNoteTests -v` → FAIL(요청 2회·note 없음)
 
-- [ ] **Step 3: 최소 구현** — `insert_table` 열 폭 블록 교체(미사용 변수 `width_adjust_failed` 소멸)
+- [x] **Step 3: 최소 구현** — `insert_table` 열 폭 블록 교체(미사용 변수 `width_adjust_failed` 소멸)
 
 ```python
 def insert_table(hwp, header, rows, table_role=None, column_widths=None, table_source=None,
@@ -402,9 +402,9 @@ def build_doc(hwp, blocks):
             _blank_line(hwp)
 ```
 
-- [ ] **Step 4: 통과 확인** — 대상 테스트 PASS → 전체 스위트 PASS(`tests/test_pdf_hwp_image_writer.py`의 `insert_table` TableCreate 실패 테스트 포함)
+- [x] **Step 4: 통과 확인** — 대상 테스트 PASS → 전체 스위트 PASS(`tests/test_pdf_hwp_image_writer.py`의 `insert_table` TableCreate 실패 테스트 포함)
 
-- [ ] **Step 5: 커밋** — 메시지 `Track F: TableColWidth 미지원은 변환당 1회 [참고]로 보고 (F-2d)`
+- [x] **Step 5: 커밋** — 메시지 `Track F: TableColWidth 미지원은 변환당 1회 [참고]로 보고 (F-2d)`
 
 ---
 
@@ -417,7 +417,7 @@ def build_doc(hwp, blocks):
 **Interfaces:**
 - Produces: `_markdown_media_counts(text) -> tuple[int, int]` (코드 블록 밖 이미지·링크 수)
 
-- [ ] **Step 1: 실패 테스트 작성**
+- [x] **Step 1: 실패 테스트 작성**
 
 ```python
 class MarkdownMediaTests(unittest.TestCase):
@@ -444,9 +444,9 @@ class MarkdownMediaTests(unittest.TestCase):
         self.assertEqual(converter.pop_conversion_notes(), [])
 ```
 
-- [ ] **Step 2: 실패 확인** — `python -m unittest tests.test_conversion_notes.MarkdownMediaTests -v` → FAIL(`!현황 그래프` 잔류, note 없음)
+- [x] **Step 2: 실패 확인** — `python -m unittest tests.test_conversion_notes.MarkdownMediaTests -v` → FAIL(`!현황 그래프` 잔류, note 없음)
 
-- [ ] **Step 3: 최소 구현**
+- [x] **Step 3: 최소 구현**
 
 ```python
 _MD_IMAGE_PATTERN = re.compile(r'!\[[^\]]*\]\([^\)]+\)')
@@ -488,9 +488,9 @@ def _markdown_media_counts(text):
 
 (`"앞 ![그림](a.png)뒤"` → 이미지 제거 후 `"앞 뒤"` — 테스트 기대값이 공백 1개가 되도록 입력에서 이미지 뒤 공백을 두지 않음.)
 
-- [ ] **Step 4: 통과 확인** — 대상 테스트 PASS → 전체 스위트 PASS
+- [x] **Step 4: 통과 확인** — 대상 테스트 PASS → 전체 스위트 PASS
 
-- [ ] **Step 5: 커밋** — 메시지 `Track F: Markdown 이미지 !alt 잔류 수정 + 이미지·링크 건수 note (F-2e)`
+- [x] **Step 5: 커밋** — 메시지 `Track F: Markdown 이미지 !alt 잔류 수정 + 이미지·링크 건수 note (F-2e)`
 
 ---
 
@@ -500,7 +500,7 @@ def _markdown_media_counts(text):
 - Modify: `anyway_to_hwpx_com.py:1640-1649`, `README.ko.md`·`README.md`(요구 사항 목록)
 - Test: `tests/test_pdf_mode_wiring.py:254-268` (의도적 계약 변경 — 영문 → 한국어)
 
-- [ ] **Step 1: 테스트 기대값 변경(RED)** — `test_editable_pdf_reports_java_fallback_note_when_odl_is_unavailable`의 단언을 교체
+- [x] **Step 1: 테스트 기대값 변경(RED)** — `test_editable_pdf_reports_java_fallback_note_when_odl_is_unavailable`의 단언을 교체
 
 ```python
         self.assertEqual(len(notes), 1)
@@ -528,9 +528,9 @@ def _markdown_media_counts(text):
         self.assertIn("Java 11 이상", notes[0])
 ```
 
-- [ ] **Step 2: 실패 확인** — `python -m unittest tests.test_pdf_mode_wiring -v` → 2건 FAIL
+- [x] **Step 2: 실패 확인** — `python -m unittest tests.test_pdf_mode_wiring -v` → 2건 FAIL
 
-- [ ] **Step 3: 구현**
+- [x] **Step 3: 구현**
 
 ```python
         if pdf_mode == PdfMode.EDITABLE.value and not capabilities.odl_enabled:
@@ -546,9 +546,9 @@ def _markdown_media_counts(text):
 
 README 요구 사항 목록에 1줄 추가 — `README.ko.md`: `- PDF 편집 모드 고품질 추출(선택): Java 11 이상 — 미충족 시 대체 추출로 자동 전환되고 변환 로그에 안내 표시` / `README.md`: `- Higher-quality editable PDF extraction (optional): Java 11+ — otherwise the converter falls back automatically and notes it in the conversion log`
 
-- [ ] **Step 4: 통과 확인** — 대상 테스트 PASS → 전체 스위트 PASS
+- [x] **Step 4: 통과 확인** — 대상 테스트 PASS → 전체 스위트 PASS
 
-- [ ] **Step 5: 커밋** — 메시지 `Track F: PDF 편집 모드 Java 안내 한국어화·조치 안내 (F-2f, E-6)`
+- [x] **Step 5: 커밋** — 메시지 `Track F: PDF 편집 모드 Java 안내 한국어화·조치 안내 (F-2f, E-6)`
 
 ---
 
@@ -561,7 +561,7 @@ README 요구 사항 목록에 1줄 추가 — `README.ko.md`: `- PDF 편집 모
 **Interfaces:**
 - Produces: `gui_conversion_worker.note_log_tag(note: str) -> str` (`"err"`·`"warn"`·`"muted"`) / 완료 메시지 `("done", completed: int, failures: list[Failure], warned: list[str])` / `gui_input_status.finish_conversion(app, completed, failures, warned=())`
 
-- [ ] **Step 1: 실패 테스트 작성**
+- [x] **Step 1: 실패 테스트 작성**
 
 `tests/test_gui_drop_wiring.py:158` 기대값을 `("done", 1, [], [])`로 변경.
 
@@ -614,9 +614,9 @@ class FinishConversionTests(unittest.TestCase):
         self.assertEqual(ask.call_args.args[0], "변환 완료")
 ```
 
-- [ ] **Step 2: 실패 확인** — `python -m unittest tests.test_gui_input_status tests.test_gui_drop_wiring -v` → FAIL(`note_log_tag` import 실패, done 3요소)
+- [x] **Step 2: 실패 확인** — `python -m unittest tests.test_gui_input_status tests.test_gui_drop_wiring -v` → FAIL(`note_log_tag` import 실패, done 3요소)
 
-- [ ] **Step 3: 구현**
+- [x] **Step 3: 구현**
 
 `gui_conversion_worker.py`:
 
@@ -691,9 +691,9 @@ def finish_conversion(app, completed, failures, warned=()) -> None:
         _offer_output_folder(app, "변환 완료", f"{completed}개 파일을 변환했습니다.\n저장 폴더를 열까요?")
 ```
 
-- [ ] **Step 4: 통과 확인** — 대상 테스트 PASS → 전체 스위트 PASS → `python tests/gui_state_harness.py --state warning --hold-seconds 0.2` exit 0
+- [x] **Step 4: 통과 확인** — 대상 테스트 PASS → 전체 스위트 PASS → `python tests/gui_state_harness.py --state warning --hold-seconds 0.2` exit 0
 
-- [ ] **Step 5: 커밋** — 메시지 `Track F: GUI 경고 note를 파일별 결과 상태에 반영 (F-2b)`
+- [x] **Step 5: 커밋** — 메시지 `Track F: GUI 경고 note를 파일별 결과 상태에 반영 (F-2b)`
 
 ---
 
@@ -703,9 +703,9 @@ def finish_conversion(app, completed, failures, warned=()) -> None:
 - Modify: 추적 해제 `dist/anyway_to_hwpx_gui.exe`(디스크 파일은 유지), `README.ko.md`·`README.md`(개발자 절 릴리스 체크리스트), `IMPROVEMENT_PLAN.md` §10-3(N14 정정)
 - Local only(gitignore): `handoff.md`
 
-- [ ] **Step 1: exe 추적 해제** — `git rm --cached dist/anyway_to_hwpx_gui.exe` → `git ls-files dist` 결과 없음, `ls dist/anyway_to_hwpx_gui.exe` 존재 확인
+- [x] **Step 1: exe 추적 해제** — `git rm --cached dist/anyway_to_hwpx_gui.exe` → `git ls-files dist` 결과 없음, `ls dist/anyway_to_hwpx_gui.exe` 존재 확인
 
-- [ ] **Step 2: README 릴리스 체크리스트** — 개발자 절 "GUI 실행 파일 빌드" 뒤에 추가(`README.ko.md`)
+- [x] **Step 2: README 릴리스 체크리스트** — 개발자 절 "GUI 실행 파일 빌드" 뒤에 추가(`README.ko.md`)
 
 ```markdown
 ### 릴리스 절차
@@ -718,11 +718,11 @@ def finish_conversion(app, completed, failures, warned=()) -> None:
 
 `README.md`에 같은 내용 영문(`### Release checklist`).
 
-- [ ] **Step 3: §10-3 정정** — `IMPROVEMENT_PLAN.md` §10-3 "skip 1건(bs4 미설치)의 처리 방침은 이번 회차에서 결정하지 않음" 줄 뒤에 `- **정정(2026-09-27, Track F N14)**: 현 환경 skip 1건은 COM 통합 테스트 게이트(`HWPX_RUN_COM_TESTS` 미설정)이며 bs4 4.14.3 설치 확인 — 방침 결정 불요, 종결.` 추가
+- [x] **Step 3: §10-3 정정** — `IMPROVEMENT_PLAN.md` §10-3 "skip 1건(bs4 미설치)의 처리 방침은 이번 회차에서 결정하지 않음" 줄 뒤에 `- **정정(2026-09-27, Track F N14)**: 현 환경 skip 1건은 COM 통합 테스트 게이트(`HWPX_RUN_COM_TESTS` 미설정)이며 bs4 4.14.3 설치 확인 — 방침 결정 불요, 종결.` 추가
 
-- [ ] **Step 4: dist 안내 문서 점검** — `dist/` 사용 안내 txt·html에서 `layout`·`편집`·`PDF 모드`·`끝` 언급을 Grep → 현행 기능 반영 여부를 결과 보고에만 기록(파일 수정은 사용자 확인 후)
+- [x] **Step 4: dist 안내 문서 점검** — `dist/` 사용 안내 txt·html에서 `layout`·`편집`·`PDF 모드`·`끝` 언급을 Grep → 현행 기능 반영 여부를 결과 보고에만 기록(파일 수정은 사용자 확인 후)
 
-- [ ] **Step 5: 커밋** — `git add README.ko.md README.md IMPROVEMENT_PLAN.md` + 스테이징된 exe 삭제 / 메시지 `Track F: exe 추적 해제·릴리스 체크리스트·기록 정정 (F-1b·F-1d·F-1e)` (`handoff.md`는 Task 8 뒤 로컬 갱신)
+- [x] **Step 5: 커밋** — `git add README.ko.md README.md IMPROVEMENT_PLAN.md` + 스테이징된 exe 삭제 / 메시지 `Track F: exe 추적 해제·릴리스 체크리스트·기록 정정 (F-1b·F-1d·F-1e)` (`handoff.md`는 Task 8 뒤 로컬 갱신)
 
 ---
 
@@ -732,15 +732,15 @@ def finish_conversion(app, completed, failures, warned=()) -> None:
 - Create(gitignore): `tests/out/track-f/wave1_check.md`, `tests/out/track-f/verify_wave1.py`
 - Modify: `IMPROVEMENT_PLAN.md` §11(결과 절), `verification-log.md`, `handoff.md`(로컬)
 
-- [ ] **Step 1: 정적 검증** — `python -m unittest discover -s tests` 전체 PASS(skip 1) · `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py table_hwpx_postprocess.py gui_conversion_worker.py gui_input_status.py` · grep: `anyway_to_hwpx_com.py`·`table_hwpx_postprocess.py`에서 `[경고]`를 `print`로 내보내는 줄 0건
+- [x] **Step 1: 정적 검증** — `python -m unittest discover -s tests` 전체 PASS(skip 1) · `python -m py_compile anyway_to_hwpx_com.py anyway_to_hwpx_gui.py table_hwpx_postprocess.py gui_conversion_worker.py gui_input_status.py` · grep: `anyway_to_hwpx_com.py`·`table_hwpx_postprocess.py`에서 `[경고]`를 `print`로 내보내는 줄 0건
 
-- [ ] **Step 2: 검증 원고 작성** — `tests/out/track-f/wave1_check.md`: 제목·항목(1. 가.)·표 2개·alt 있는 이미지 1개·링크 1개·금액·날짜 포함
+- [x] **Step 2: 검증 원고 작성** — `tests/out/track-f/wave1_check.md`: 제목·항목(1. 가.)·표 2개·alt 있는 이미지 1개·링크 1개·금액·날짜 포함
 
-- [ ] **Step 3: 실COM 변환** — `python anyway_to_hwpx_com.py --preflight` OK 후 `python anyway_to_hwpx_com.py tests/out/track-f/wave1_check.md -o tests/out/track-f --insert-end-mark` → 판정: `[참고] 표 열 너비` 1회, `[확인 필요] Markdown 이미지 1개` 1회, 각 note 1회 출력, 종료코드 0
+- [x] **Step 3: 실COM 변환** — `python anyway_to_hwpx_com.py --preflight` OK 후 `python anyway_to_hwpx_com.py tests/out/track-f/wave1_check.md -o tests/out/track-f --insert-end-mark` → 판정: `[참고] 표 열 너비` 1회, `[확인 필요] Markdown 이미지 1개` 1회, 각 note 1회 출력, 종료코드 0
 
-- [ ] **Step 4: 구조·실물 검증** — `python scripts/hwpx_editor_safety_gate.py tests/out/track-f/wave1_check.hwpx` PASS → `verify_wave1.py`: 산출물 XML에서 `!` 잔류·alt 텍스트 부재, 여백 7087/5669(상·하) 등 정본값 확인 → 실COM `Open(path, 'HWPX', '')` → `SaveAs(pdf, 'PDF', '')` → PyMuPDF로 1쪽 PNG 렌더 → PNG를 직접 열어 글리프·여백 육안 확인
+- [x] **Step 4: 구조·실물 검증** — `python scripts/hwpx_editor_safety_gate.py tests/out/track-f/wave1_check.hwpx` PASS → `verify_wave1.py`: 산출물 XML에서 `!` 잔류·alt 텍스트 부재, 여백 7087/5669(상·하) 등 정본값 확인 → 실COM `Open(path, 'HWPX', '')` → `SaveAs(pdf, 'PDF', '')` → PyMuPDF로 1쪽 PNG 렌더 → PNG를 직접 열어 글리프·여백 육안 확인
 
-- [ ] **Step 5: 결과 기록·커밋** — §11에 "11-10. 웨이브 1 실행 결과" 표(과제·판정·증거) 추가, `verification-log.md`에 실행 명령·결과 추가 / 메시지 `Track F: 웨이브 1 검증 결과 기록`
+- [x] **Step 5: 결과 기록·커밋** — §11에 "11-10. 웨이브 1 실행 결과" 표(과제·판정·증거) 추가, `verification-log.md`에 실행 명령·결과 추가 / 메시지 `Track F: 웨이브 1 검증 결과 기록`
 
 ---
 
@@ -749,9 +749,9 @@ def finish_conversion(app, completed, failures, warned=()) -> None:
 **Files:**
 - Create(gitignore): `tests/out/track-f/check_exe.py`, `tests/out/track-f/release_notes.md`
 
-- [ ] **Step 1: exe 동일성** — `git hash-object dist/anyway_to_hwpx_gui.exe`와 `git ls-tree c5438a8 dist/anyway_to_hwpx_gui.exe`의 blob 해시 일치 확인, SHA-256·크기는 `check_exe.py`에서 `hashlib`로 계산해 기록
+- [x] **Step 1: exe 동일성** — `git hash-object dist/anyway_to_hwpx_gui.exe`와 `git ls-tree c5438a8 dist/anyway_to_hwpx_gui.exe`의 blob 해시 일치 확인, SHA-256·크기는 `check_exe.py`에서 `hashlib`로 계산해 기록
 
-- [ ] **Step 2: E-7 포함 판독(실행 없이)** — `check_exe.py`
+- [x] **Step 2: E-7 포함 판독(실행 없이)** — `check_exe.py`
 
 ```python
 import hashlib
@@ -781,7 +781,7 @@ print("HSecDef" in names(code))
 
 판정: `True`(E-7 경로 포함)
 
-- [ ] **Step 3: 릴리스 노트 초안** — `tests/out/track-f/release_notes.md`: 포함 수정(E-7 PDF layout 여백, UPX 재압축), 크기·SHA-256, 요구 사항(Windows·한컴오피스), 직전 릴리스 대비 변경
+- [x] **Step 3: 릴리스 노트 초안** — `tests/out/track-f/release_notes.md`: 포함 수정(E-7 PDF layout 여백, UPX 재압축), 크기·SHA-256, 요구 사항(Windows·한컴오피스), 직전 릴리스 대비 변경
 
 - [ ] **Step 4: 최종 확인 요청(사용자)** — 한 번에 제시: ① `feature/track-f-wave1` → `main` `--no-ff` 병합 후 push할 커밋·파일 목록 ② 릴리스 태그(권장 `v2026.08.27` → `c5438a8`)·제목·노트·자산 ③ exe 기동 smoke(사용자 직접 실행 또는 5초 기동 실행 승인) ④ 상위 `~/.claude` 서브모듈 포인터는 변경하지 않음
 

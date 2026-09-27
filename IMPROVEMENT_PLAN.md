@@ -529,3 +529,24 @@ python scripts/hwpx_editor_safety_gate.py tests\out\track-f\sample_complex.hwpx
 python tests/gui_state_harness.py --state warning --hold-seconds 0.2
 python scripts/golden_run.py   # F-4 산출 예정
 ```
+
+### 11-10. 웨이브 1 실행 결과 (2026-09-27, 브랜치 `feature/track-f-wave1`, 실행 Claude)
+
+| 과제 | 판정 | 증거 |
+| :-- | :-: | :-- |
+| F-2a 경고 note 통합 | PASS | 경고 `print` 0곳(grep) · 후처리 6단계 실패가 `result['notes']`에 도달(단위 테스트) · CLI note 1회 출력(단위 테스트) |
+| F-2b GUI 경고 반영 | PASS | `note_log_tag`·`finish_conversion` 단위 테스트 · GUI 상태 하네스 7개 상태 exit 0 |
+| F-2d `TableColWidth` 1회 `[참고]` | PASS | 표 2개 → 조회 1회(단위 테스트) · 실COM 변환에서 `[참고]` 1회·`[경고]` 0건 |
+| F-2e Markdown 이미지·링크 | PASS | `!alt` 잔류 결함 RED 재현 → 수정 · 실COM 산출물 본문에 alt·URL 부재 · note 각 1회 |
+| F-2f Java 안내 한국어화(E-6) | PASS | 단위 테스트 2건(버전 확인·미확인 분기) · README 요구 사항 보강 |
+| F-1b exe 추적 해제 | PARTIAL | 로컬 커밋 완료(`git ls-files dist` 비어 있음) — push는 최종 확인 대기 |
+| F-1d 릴리스 절차 | PASS | README.ko.md·README.md 개발자 절 |
+| F-1e 문서 점검·정정 | PASS / 갱신 보류 | §10-3 정정(N14) · `dist/` 안내 문서(05-28, txt·html·pdf 5종)는 PDF 두 모드·드래그 앤 드롭·저장 폴더 비우기·경고 대화상자 미반영 — 갱신은 사용자 확인 후 |
+| F-1a 릴리스 | 대기 | 디스크 exe blob = `c5438a8` blob(`2a61e81`) · 73,746,447 bytes · SHA-256 `9369b286f1ed9bf23fe57c1f994181522ce151068820c57f6e8888554e818824` · 내장 `anyway_to_hwpx_com.pyc`에 E-7(`HSecDef`) 포함 판독 — 발행은 최종 확인 후 |
+
+- 공통 게이트: 단위 스위트 258 tests OK(skip 1 = COM 게이트) · `py_compile` · 실COM 변환 exit 0 · 안전 게이트 PASS · 한글 재열람·PDF 저장·1쪽 렌더 육안 확인 포함 실물 검증 11/11 PASS
+- NOT_RUN: 실COM PDF layout 통합 테스트(약 26분) — layout 경로 변경은 note 합류 1줄이며 단위 테스트(layout 경로 6건)로 확인
+- 계획 대비 조정: F-2 완료조건 "GUI 상태 하네스 `warning`이 실제 note 경로로 재현"은 모달 대화상자 때문에 `finish_conversion` 단위 테스트(대화상자 패치)로 대체 검증
+- 관찰(범위 밖, 후속 후보)
+  - 줄 간격 후처리는 paraPr 직계 `lineSpacing`만 갱신 — 본문 참조 paraPr은 switch 내부까지 160%(실측)라 영향 없음. 미사용 기본 스타일(머리말 150·각주 130 등)은 직계/switch 값 불일치 잔존
+  - 표 뒤 빈 단락 3개 연속(표 뒤 빈 줄 + 1단계 항목 앞 빈 줄 + 표 종료 줄바꿈) — 정본 §8-1 "표 앞뒤 단락 구분" 대비 과다 여부 검토 후보
