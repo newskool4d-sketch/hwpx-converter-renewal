@@ -174,6 +174,79 @@ class TableColWidthNoteTests(unittest.TestCase):
         self.assertIn("[경고] 열 너비 조정 실패: COM 오류", notes)
 
 
+class _ParagraphAction(_HAction):
+    """InsertText 문자열과 BreakPara를 순서대로 기록하는 HAction 대역."""
+
+    def __init__(self, hwp):
+        self.hwp = hwp
+
+    def Execute(self, name, _hset):
+        if name == "InsertText":
+            self.hwp.events.append(self.hwp.HParameterSet.HInsertText.Text)
+        return True
+
+    def Run(self, name):
+        if name == "BreakPara":
+            self.hwp.events.append(None)
+        return True
+
+
+class _ParagraphHwp(_TableHwp):
+    def __init__(self):
+        super().__init__()
+        self.events = []
+        self.HAction = _ParagraphAction(self)
+
+    def paragraphs(self):
+        result, current = [], ""
+        for event in self.events:
+            if event is None:
+                result.append(current)
+                current = ""
+            else:
+                current += event
+        return result
+
+
+SIHAENGMUN_SAMPLE = "제목: 체험학습 운영 안내\n\n1. 목적\n가. 학생 참여형 체험학습 운영\n나. 안전 관리 체계 확립\n\n2. 일정\n가. 사전 교육 실시\n나. 현장 체험학습 운영\n"
+
+
+class ListSpacingTests(unittest.TestCase):  # N19
+    def _paragraphs(self, parse_type, **build_kwargs):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "s.md"
+            source.write_text(SIHAENGMUN_SAMPLE, encoding="utf-8")
+            blocks = converter.detect_and_parse(str(source), doc_type=parse_type)
+        hwp = _ParagraphHwp()
+        converter.build_doc(hwp, blocks, **build_kwargs)
+        return hwp.paragraphs()
+
+    # 특성화: 계획서 모드(기본)는 두 번째 이후 '1.' 단계 항목 앞 빈 줄 유지
+    def test_plan_keeps_blank_line_before_next_number_item(self):
+        self.assertEqual(self._paragraphs("plan"), [
+            "제목: 체험학습 운영 안내", "1. 목적", "가. 학생 참여형 체험학습 운영", "나. 안전 관리 체계 확립",
+            "", "2. 일정", "가. 사전 교육 실시", "나. 현장 체험학습 운영",
+        ])
+
+    def test_sihaengmun_has_no_automatic_blank_lines(self):
+        self.assertEqual(self._paragraphs("sihaengmun", doc_type="sihaengmun"), [
+            "제목: 체험학습 운영 안내", "1. 목적", "가. 학생 참여형 체험학습 운영", "나. 안전 관리 체계 확립",
+            "2. 일정", "가. 사전 교육 실시", "나. 현장 체험학습 운영",
+        ])
+
+    def test_convert_file_passes_doc_type_to_build_doc(self):
+        captured = []
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "s.md"
+            source.write_text("1. 목적", encoding="utf-8")
+            with (
+                patch.object(converter, "build_doc", side_effect=lambda _hwp, _blocks, **kwargs: captured.append(kwargs)),
+                patch.object(converter.time, "sleep", return_value=None),
+            ):
+                converter.convert_file(_FakeHwp(), source, Path(tmp) / "s.hwpx", doc_type="sihaengmun")
+        self.assertEqual(captured, [{"doc_type": "sihaengmun"}])
+
+
 class OfficialNormalizationTests(unittest.TestCase):
     """공문 정규화(날짜·금액·표기 점검)와 '끝' 표시의 분리 — build_doc에 전달되는 blocks로 판정."""
 
@@ -186,7 +259,7 @@ class OfficialNormalizationTests(unittest.TestCase):
             source = Path(tmp) / "s.md"
             source.write_text("2026.3.22 행사\n\n강사료 400,000원", encoding="utf-8")
             with (
-                patch.object(converter, "build_doc", side_effect=lambda _hwp, blocks: captured.append(blocks)),
+                patch.object(converter, "build_doc", side_effect=lambda _hwp, blocks, **_kwargs: captured.append(blocks)),
                 patch.object(converter.time, "sleep", return_value=None),
             ):
                 result = converter.convert_file(_FakeHwp(), source, Path(tmp) / "s.hwpx", **kwargs)

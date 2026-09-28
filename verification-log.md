@@ -260,3 +260,10 @@
 - `gh release create v2026.09.28 <C:/tmp/hwpx-release-v20260928/dist 자산> --target f99d58f… --title "Anyway to HWPX GUI (2026-09-28)" --notes-file tests/out/track-f/release_notes_v3.md --latest`(업로드 직전 재해시 일치).
 - 사후: API 자산 `digest` = `sha256:74f689b3…43c2`(로컬 일치, DIGEST MATCH), size 75,111,686, state uploaded / 태그 → `f99d58f` / draft·prerelease false / 목록상 Latest / `19806ca`(E-7) 조상 확인 / `git ls-files dist` 비어 있음.
 - 로컬 `dist/anyway_to_hwpx_gui.exe`는 사용자 승인으로 같은 빌드로 교체(원본·대상 해시 사전 대조: `53ebe077…` → `74f689b3…`, ignored).
+
+### N19 시행문 빈 단락 수정 (2026-09-28, 워크트리 `C:\tmp\hwpx-n19`, 브랜치 `fix/n19-sihaengmun-spacing`)
+
+- 결정: 사용자 선택 "시행문 모드는 목록 항목 사이 자동 빈 줄 없음"(정본 §2-2 예시·§7-3 본문 단락 0pt). 계획서 모드는 현행(`1.` 단계 절 구분 빈 줄) 유지.
+- `0ece11f` 개발 재개 버전 `2026.09.28+dev`. `1f5fa1a` 수정 — `build_doc`에 `doc_type` 키워드(기본 `plan`), `convert_file`이 전달.
+- TDD: 한글 COM 대역(InsertText·BreakPara 기록)으로 파서→`build_doc` 단락 목록 대조. 계획서 특성화는 수정 전 코드에서 통과, 시행문 테스트는 인자 추가만 한 상태에서 실제 빈 단락 3개로 실패(RED) 확인 후 규칙 수정으로 통과. 기존 `build_doc` 가로채기 람다 1곳 키워드 수용으로 갱신. 295 tests OK(skip 1), `py_compile` OK.
+- 실COM(`tests/out/track-f/n19/run_n19.py`): 1차 시작 게이트에서 사용자 문서 편집용 한글(탐색기 실행, 자동화 아님) 감지로 중단 → 사용자 선택으로 종료 대기(최대 30분) 후 자동 실행. 한글 종료 확인 09:36:19, 실행 폴더 `run-20260928-093629/`: 12/12 PASS — 시행문 단락 목록 빈 단락 0, 계획서 `2. 일정` 앞 빈 단락 1(현행 유지), 시행문 `hc:left` 620·960, 두 산출물 자가검증 0·편집기 안전 게이트 PASS, 시행문 한글 재열람→PDF 1쪽 렌더 육안 확인(항목 연속 배치). 종료 후 `Hwp.exe` 0개.
