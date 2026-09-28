@@ -2490,7 +2490,7 @@ def insert_pdf_page_images(hwp, pages):
 
 # ─── 문서 빌드 ─────────────────────────────────────────────────────────────────
 
-def build_doc(hwp, blocks):
+def build_doc(hwp, blocks, doc_type='plan'):
     first_depth1_li_seen = False
     col_width_supported = True  # TableColWidth 미지원 확인 후에는 표마다 재시도하지 않음
 
@@ -2517,7 +2517,8 @@ def build_doc(hwp, blocks):
 
         elif t == 'li':
             depth = blk.get('depth', 0)
-            if depth == 1:
+            # 시행문은 항목 사이 빈 줄 없음(정본 §2-2 예시·§7-3 본문 단락 0pt, N19) — 계획서는 '1.' 단계 절 구분 유지
+            if depth == 1 and doc_type != 'sihaengmun':
                 if first_depth1_li_seen:
                     _blank_line(hwp)
                 first_depth1_li_seen = True
@@ -3025,7 +3026,7 @@ def convert_file(
                 if rendered_layout:
                     insert_pdf_page_images(hwp, parsed.pages)
                 else:
-                    build_doc(hwp, blocks)
+                    build_doc(hwp, blocks, doc_type=doc_type)
             except Exception as exc:
                 if rendered_layout:
                     raise RuntimeError(f'PDF layout build failed for {src.name}: {exc}') from exc
