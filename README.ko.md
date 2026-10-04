@@ -167,7 +167,7 @@ $stack = "full" # full, text, none 중 하나
 $root = "C:\tmp\hwpx-gui-$stack"
 $env:HWPX_GUI_PDF_STACK = $stack
 python -m PyInstaller --clean --noconfirm `
-  --distpath "$root\dist" --workpath "$root\work" --specpath (Get-Location) `
+  --distpath "$root\dist" --workpath "$root\work" `
   .\anyway_to_hwpx_gui.spec
 ```
 

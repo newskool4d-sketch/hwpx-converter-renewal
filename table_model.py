@@ -27,8 +27,8 @@ class TableCellStyle:
     border_width: int = 10
     margin_left: int = 510  # 정본 §8-6: 셀 좌우 안여백 1.8mm
     margin_right: int = 510
-    margin_top: int = 120
-    margin_bottom: int = 120
+    margin_top: int = 200  # 셀 위아래 안여백 각각 약 0.7mm
+    margin_bottom: int = 200
 
 
 @dataclass(frozen=True, slots=True)

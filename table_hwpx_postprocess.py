@@ -247,6 +247,10 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
             col_count = _int_attr(tbl, "colCnt", 0)
             if col_count <= 0:
                 continue
+            # 자동 생성 표는 글자처럼 취급하지 않아 긴 표의 쪽 나눔을 허용한다.
+            position = tbl.find("hp:pos", NS)
+            if position is not None:
+                changed = _set_attrs(position, {"treatAsChar": "0"}) or changed
             sz = tbl.find("hp:sz", NS)
             total_width = text_width or (int(sz.attrib.get("width", TABLE_TOTAL_WIDTH) or TABLE_TOTAL_WIDTH) if sz is not None else TABLE_TOTAL_WIDTH)
             layout = _layout_for(table_layouts[table_index], total_width)

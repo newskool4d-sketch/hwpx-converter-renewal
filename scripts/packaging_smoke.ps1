@@ -72,7 +72,7 @@ foreach ($currentStack in $stacks) {
     try {
         $env:HWPX_GUI_PDF_STACK = $currentStack
         & python -m PyInstaller --clean --noconfirm `
-            --distpath $dist --workpath $work --specpath $repo $spec
+            --distpath $dist --workpath $work $spec
         if ($LASTEXITCODE -ne 0) {
             throw "PyInstaller failed for stack '$currentStack' (exit $LASTEXITCODE)"
         }

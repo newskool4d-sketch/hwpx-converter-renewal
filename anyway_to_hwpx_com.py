@@ -2,7 +2,7 @@
 HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX 변환.
 확장자를 자동 감지하여 내부 blocks 구조로 정규화한 뒤 HWP COM으로 저장.
 """
-__version__ = '2026.09.28+dev'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
+__version__ = '2026.10.04'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
 
 from pathlib import Path
 import argparse
@@ -2263,12 +2263,81 @@ def _set_heading_para_spacing(header_root, section_root):
     return changed, cloned
 
 
+def _keep_table_headings_with_next(header_root, section_root):
+    """표 바로 앞 제목과 사이의 빈 문단만 묶고, 긴 표의 쪽 나눔은 유지한다."""
+    hp = f'{{{_NS_HP}}}'
+    hh = f'{{{_NS_HH}}}'
+    char_levels = _charpr_level_map(header_root)
+    breaks_before = {
+        para_pr.get('id') for para_pr in header_root.iter(f'{hh}paraPr')
+        if any(setting.get('pageBreakBefore') == '1' for setting in para_pr.findall(f'{hh}breakSetting'))
+    }
+    paragraphs = section_root.findall(f'{hp}p')
+    targets = []
+    for index, paragraph in enumerate(paragraphs):
+        if paragraph.find(f'{hp}run/{hp}tbl') is None:
+            continue
+        previous = index - 1
+        while previous >= 0:
+            candidate = paragraphs[previous]
+            runs = candidate.findall(f'{hp}run')
+            # 그림·필드·다른 표가 있는 문단은 빈 문단으로 건너뛰지 않는다.
+            if any(child.tag != f'{hp}t' for run in runs for child in run):
+                break
+            text = ''.join(node.text or '' for run in runs for node in run.findall(f'{hp}t')).strip()
+            if text:
+                if any(char_levels.get(run.get('charPrIDRef')) for run in runs):
+                    chain = paragraphs[previous:index + 1]
+                    if not any(p.get('pageBreak') == '1' or p.get('columnBreak') == '1'
+                               or p.get('paraPrIDRef') in breaks_before for p in chain[1:]):
+                        targets.extend(chain[:-1])
+                break
+            previous -= 1
+
+    container = header_root.find(f'.//{hh}paraProperties')
+    if not targets or container is None:
+        return False
+    para_by_id = {p.get('id'): p for p in container.findall(f'{hh}paraPr')}
+    next_id = max((int(pid) for pid in para_by_id if str(pid).isdigit()), default=-1) + 1
+    clones = {}
+    changed = False
+    for paragraph in targets:
+        pid = paragraph.get('paraPrIDRef')
+        source = para_by_id.get(pid)
+        if source is None:
+            continue
+        setting = source.find(f'{hh}breakSetting')
+        if setting is not None and setting.get('keepWithNext') == '1' and setting.get('keepLines') == '1':
+            continue
+        if pid not in clones:
+            clone = copy.deepcopy(source)
+            clone_id = str(next_id)
+            next_id += 1
+            clone.set('id', clone_id)
+            setting = clone.find(f'{hh}breakSetting')
+            if setting is None:
+                setting = ET.Element(f'{hh}breakSetting')
+                children = list(clone)
+                heading = clone.find(f'{hh}heading')
+                clone.insert(children.index(heading) + 1 if heading is not None else 0, setting)
+            setting.set('keepWithNext', '1')
+            setting.set('keepLines', '1')
+            container.append(clone)
+            clones[pid] = clone_id
+        paragraph.set('paraPrIDRef', clones[pid])
+        changed = True
+    if changed:
+        container.set('itemCnt', str(len(container.findall(f'{hh}paraPr'))))
+    return changed
+
+
 def apply_official_paragraph_spacing(hwpx_path):
-    """Post-process header.xml: 제목 단락 앞/뒤 간격 (정본 §7-3).
+    """제목 단락 간격(정본 §7-3)과 제목·표 시작의 쪽 배치를 후처리한다.
 
     COM이 무시하는 SpaceBefore/After를 paraPr margin(hc:prev/next)으로 실제 반영한다.
     본문은 0/0(무변경). 제목이 본문과 paraPr을 공유하면 clone을 만들어 제목 단락에만
-    재배정하므로, 이 경우 header.xml(clone 추가)과 section0.xml(재배정) 모두 다시 쓴다.
+    재배정한다. 표 직전 제목과 사이 빈 문단도 공유 속성을 분리해 함께 배치한다.
+    참조를 재배정한 경우 header.xml과 section0.xml을 함께 다시 쓴다.
     """
     if not os.path.exists(hwpx_path):
         return
@@ -2284,12 +2353,13 @@ def apply_official_paragraph_spacing(hwpx_path):
         header_root = ET.fromstring(header_xml)
         section_root = ET.fromstring(section_xml)
         changed, cloned = _set_heading_para_spacing(header_root, section_root)
+        pagination_changed = _keep_table_headings_with_next(header_root, section_root)
         if cloned:
             _add_conversion_note(f'[참고] 제목 단락 간격: 공유 paraPr {cloned}건 분리 적용 (§7-3)')
-        if changed:
+        if changed or pagination_changed:
             _rewrite_zip_entry(hwpx_path, header_name, serialize_hwpml_part(header_root))
-        if cloned:
-            # clone 재배정은 section0.xml의 paraPrIDRef를 바꾸므로 반드시 함께 기록
+        if cloned or pagination_changed:
+            # 간격·쪽 배치용 clone 참조를 section0.xml에도 함께 기록한다.
             _rewrite_zip_entry(hwpx_path, section_name, serialize_hwpml_part(section_root))
     except Exception as e:
         _add_conversion_note(f'[경고] 단락 간격 후처리 실패: {e}')

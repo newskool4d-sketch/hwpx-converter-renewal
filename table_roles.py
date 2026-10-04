@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Final
 
+from hwpx_layout import TABLE_HEADER_WIDTH_PROFILES
 from hwpx_layout import calc_col_widths
 from hwpx_layout import visual_width
 
@@ -19,7 +21,9 @@ TABLE_ROLE_TWO_COLUMN: Final = "two_column"
 HEADER_FILL_COLOR: Final = 0xC8C8C8  # 정본 §8-2: 헤더 회색 배경 RGB 200
 SCHEDULE_HEADER: Final = ("시작", "종료", "분", "내용", "담당")
 
-BUDGET_HEADER_TERMS: Final = ("예산", "예산액", "금액", "단가", "수량", "합계", "원", "amount", "price", "total")
+BUDGET_HEADER_TERMS: Final = ("예산", "예산액", "금액", "단가", "수량", "합계", "amount", "price", "total")
+# '인원', '위원', '지원'의 일부가 아니라 독립된 화폐 단위만 인식한다.
+BUDGET_UNIT_PATTERN: Final = re.compile(r"(?<!\w)(?:천|만|백만|천만|억)?원(?!\w)")
 TIME_HEADER_TERMS: Final = ("시작", "종료", "시간", "시각", "일시", "분", "소요")
 PROGRAM_HEADER_TERMS: Final = ("프로그램", "학교급", "대상", "운영 형태", "중심", "편성", "고도화")
 TASK_HEADER_TERMS: Final = ("추진 과제", "핵심 내용", "주요 내용", "추진 내용", "주요 방법", "기대 효과", "단계", "과제")
@@ -75,7 +79,7 @@ def infer_table_role(header: list[str], rows: list[list[str]]) -> str:
         return TABLE_ROLE_BASIC
     if _is_schedule(header, rows):
         return TABLE_ROLE_SCHEDULE
-    if _has_any(joined, BUDGET_HEADER_TERMS):
+    if _has_any(joined, BUDGET_HEADER_TERMS) or BUDGET_UNIT_PATTERN.search(joined):
         return TABLE_ROLE_BUDGET
     if col_count == 2 and _has_any(joined, TWO_COLUMN_DETAIL_TERMS):
         return TABLE_ROLE_TWO_COLUMN
@@ -217,6 +221,9 @@ def table_widths_for(
         return []
     calculated = calc_col_widths(header, rows, total=total_width)
     profile = _role_profile(table_role, col_count)
+    if table_role == TABLE_ROLE_TWO_COLUMN and col_count == 2:
+        # 헤더별 기본 비율(30:70 등)을 기준으로 기존 내용 길이 보정을 적용한다.
+        profile = TABLE_HEADER_WIDTH_PROFILES.get(tuple(cell.strip() for cell in header), profile)
     if profile:
         profile_w = _scale_profile(profile, total_width)
         return _blend_profile_with_content(profile_w, calculated, total_width)

@@ -40,6 +40,7 @@ def make_table_section_xml(col_count=3):
         f'<hp:sec xmlns:hp="{HP_NS}">'
         f'<hp:tbl colCnt="{col_count}" rowCnt="2">'
         f'<hp:sz width="9000" height="1800"/>'
+        '<hp:pos treatAsChar="1" flowWithText="1"/>'
         f'{"".join(cells)}</hp:tbl></hp:sec>'
     )
 
@@ -228,7 +229,9 @@ class TableHwpxPostProcessTests(unittest.TestCase):
         self.assertIsNone(last_fill.find("hc:fillBrush/hc:winBrush", NS))
         self.assertEqual(span.get("colSpan"), "2")
         self.assertEqual(span.get("rowSpan"), "1")
-        self.assertEqual(margin.attrib, {"left": "510", "right": "510", "top": "120", "bottom": "120"})
+        self.assertEqual(margin.attrib, {"left": "510", "right": "510", "top": "200", "bottom": "200"})
+        position = section_root.find(".//hp:tbl/hp:pos", NS)
+        self.assertEqual(position.attrib, {"treatAsChar": "0", "flowWithText": "1"})
 
 
 if __name__ == "__main__":
