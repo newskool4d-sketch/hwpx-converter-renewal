@@ -97,7 +97,7 @@ a = Analysis(
     ['anyway_to_hwpx_gui.py'],
     pathex=[],
     binaries=_tkdnd_binaries,
-    datas=_odl_datas + _tkdnd_datas + _tcl_tk_datas,
+    datas=_odl_datas + _tkdnd_datas + _tcl_tk_datas + [('kordoc_bridge.mjs', '.')],
     hiddenimports=pdf_text_imports + odl_imports + _tkdnd_hiddenimports,
     hookspath=[],
     hooksconfig={},

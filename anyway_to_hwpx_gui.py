@@ -43,7 +43,17 @@ from gui_theme import (
 
 class ConverterApp(BaseTk):
     def __init__(self, *, capabilities: RuntimeCapabilities | None = None):
-        super().__init__()
+        self._dnd_available = False
+        self._dnd_note = None
+        try:
+            super().__init__()
+            self._dnd_available = TkinterDnD is not None
+        except RuntimeError:
+            # TkinterDnD creates a working Tk root before loading its optional
+            # native extension. Keep that root if only the extension failed.
+            if "tk" not in self.__dict__:
+                raise
+            self._dnd_note = "끌어놓기를 사용할 수 없습니다. '파일 추가'로 선택하세요."
         self.title(f"HWPX 변환기 {converter.__version__}")
         self.geometry("800x680")
         self.minsize(700, 600)  # 문서 유형 행(웨이브 2) 추가분만큼 높여 최소 크기에서도 파일 목록 공간 유지
@@ -67,11 +77,21 @@ class ConverterApp(BaseTk):
         self.messages = queue.Queue()
         self.worker = None
         self._busy = False
+        self._isolated_conversion = True
+        self.cancel_event = threading.Event()
+        self.failed_files = []
+        self._last_snapshot_args = None
+        self._cancelled = False
+        self._workbench = None
+        self.file_timeout_seconds = tk.StringVar(value="180")
 
         self._init_styles()
         self._build_ui()
         self._register_drop_targets()
-        self.after(100, self._poll_messages)
+        if self._dnd_note:
+            self._append_log(self._dnd_note, "warn")
+        self._poll_id = self.after(100, self._poll_messages)
+        self.protocol("WM_DELETE_WINDOW", self._close_app)
 
     def _init_styles(self):
         configure_styles(self)
@@ -84,7 +104,7 @@ class ConverterApp(BaseTk):
 
     # ─── 동작 ────────────────────────────────────────────────────────────────
     def _register_drop_targets(self):
-        if DND_FILES is None:
+        if DND_FILES is None or not self._dnd_available:
             return
         for widget in (self.list_wrap, self.file_list):
             widget.drop_target_register(DND_FILES)
@@ -115,6 +135,57 @@ class ConverterApp(BaseTk):
         self.pdf_layout_radio.configure(state=pdf_state)
         self.pdf_editable_radio.configure(state=pdf_state)
         self.out_entry.configure(state=state)
+        for name in ("tools_button", "timeout_entry"):
+            control = self.__dict__.get(name)
+            if control is not None:
+                control.configure(state=state)
+        if "cancel_button" in self.__dict__:
+            self.cancel_button.configure(state="normal" if busy else "disabled")
+            self.retry_button.configure(state="normal" if not busy and self.failed_files else "disabled")
+
+    def open_document_tools(self):
+        if self._is_busy():
+            return
+        from document_workbench import DocumentWorkbench
+
+        if self._workbench is not None and self._workbench.winfo_exists():
+            self._workbench.lift()
+            return
+        self._workbench = DocumentWorkbench(self)
+
+    def cancel_conversion(self):
+        if self._is_busy():
+            self.cancel_event.set()
+            self.cancel_button.configure(state="disabled")
+            self.status.set("취소 중… 현재 작업을 정리합니다.")
+
+    def retry_failed(self):
+        if self._is_busy() or not self.failed_files or self._last_snapshot_args is None:
+            return
+        files = tuple(self.failed_files)
+        args = list(self._last_snapshot_args)
+        args[0] = files
+        args[2] = False  # 재시도는 이미 완료된 파일을 지우지 않는다.
+        self._launch_conversion(tuple(args))
+
+    def _close_app(self):
+        workbench = self.__dict__.get("_workbench")
+        if workbench is not None and workbench.winfo_exists():
+            workbench.close()
+            if workbench.winfo_exists():
+                return
+        if self._is_busy():
+            self.cancel_conversion()
+            self.after(100, self._close_app)
+            return
+        self.destroy()
+
+    def destroy(self):
+        poll_id = self.__dict__.get("_poll_id")
+        if poll_id is not None:
+            self.after_cancel(poll_id)
+            self._poll_id = None
+        super().destroy()
 
     def _supported_filetypes(self):
         if ".pdf" in self.supported_extensions:
@@ -213,13 +284,29 @@ class ConverterApp(BaseTk):
         pdf_mode = self.pdf_mode.get()
         official = bool(self.official.get())
         doc_type = self.doc_type.get()
+        if "file_timeout_seconds" in self.__dict__:
+            try:
+                timeout = int(self.file_timeout_seconds.get())
+                if not 10 <= timeout <= 3600:
+                    raise ValueError
+            except ValueError:
+                messagebox.showwarning("확인", "파일당 제한 시간은 10~3600초로 입력하세요.")
+                return
+            self._timeout_snapshot = timeout
+        self._launch_conversion((files, output_dir, empty_output_folder, insert_end_mark, pdf_mode, official, doc_type))
+
+    def _launch_conversion(self, args):
+        self.cancel_event = threading.Event()
+        self._cancelled = False
+        self.failed_files = []
+        self._last_snapshot_args = args
         self._set_busy(True)
-        self.progress.configure(maximum=len(files), value=0)
+        self.progress.configure(maximum=len(args[0]), value=0)
         self.status.set("HWP 실행 중...")
         self._append_log("HWP 실행 중...", "muted")
         self.worker = threading.Thread(
             target=self._convert_worker,
-            args=(files, output_dir, empty_output_folder, insert_end_mark, pdf_mode, official, doc_type),
+            args=args,
             daemon=True,
         )
         self.worker.start()
@@ -235,8 +322,12 @@ class ConverterApp(BaseTk):
             pdf_mode=pdf_mode,
             official=official,
             doc_type=doc_type,
+            file_timeout_seconds=self.__dict__.get("_timeout_snapshot", 180),
         )
-        run_conversion(snapshot, self.messages.put)
+        if self.__dict__.get("_isolated_conversion", False):
+            run_conversion(snapshot, self.messages.put, isolate=True, cancel_event=self.cancel_event)
+        else:
+            run_conversion(snapshot, self.messages.put)
 
     def _poll_messages(self):
         try:
@@ -251,9 +342,11 @@ class ConverterApp(BaseTk):
                         self.status.set(f"변환 중: {name}  ({done + 1}/{total})")
                 elif msg[0] == "done":
                     self._finish_conversion(msg[1], msg[2], msg[3])
+                elif msg[0] == "cancelled":
+                    self._cancelled = True
         except queue.Empty:
             pass
-        self.after(100, self._poll_messages)
+        self._poll_id = self.after(100, self._poll_messages)
 
     def _finish_conversion(self, completed, failures, warned=()):
         finish_conversion(self, completed, failures, warned)
@@ -275,6 +368,9 @@ class ConverterApp(BaseTk):
 
 
 def main():
+    from multiprocessing import freeze_support
+
+    freeze_support()
     app = ConverterApp()
     app.mainloop()
 

@@ -95,6 +95,10 @@ def build_ui(app) -> None:
     root.rowconfigure(6, weight=2)
     header = ttk.Frame(root, style="Bg.TFrame")
     header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+    app.tools_button = ttk.Button(
+        header, text="문서 읽기 · 비교 · 수정", style="Secondary.TButton", command=app.open_document_tools
+    )
+    app.tools_button.pack(side=tk.RIGHT, padx=(12, 0))
     ttk.Label(header, text="HWPX 변환기", style="Title.TLabel").pack(anchor="w")
     ttk.Label(
         header,
@@ -215,6 +219,19 @@ def build_ui(app) -> None:
     app.progress.grid(row=0, column=0, sticky="ew", padx=(0, 14))
     app.convert_button = ttk.Button(action, text="변환 시작", style="Primary.TButton", command=app.start_conversion)
     app.convert_button.grid(row=0, column=1)
+    recovery = ttk.Frame(action, style="Bg.TFrame")
+    recovery.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(7, 0))
+    ttk.Label(recovery, text="파일당 제한(초)", style="Sub.TLabel").pack(side=tk.LEFT)
+    app.timeout_entry = ttk.Entry(recovery, textvariable=app.file_timeout_seconds, width=7)
+    app.timeout_entry.pack(side=tk.LEFT, padx=(6, 12))
+    app.cancel_button = ttk.Button(
+        recovery, text="취소", style="Secondary.TButton", command=app.cancel_conversion, state="disabled"
+    )
+    app.cancel_button.pack(side=tk.RIGHT)
+    app.retry_button = ttk.Button(
+        recovery, text="실패·미완료만 재시도", style="Secondary.TButton", command=app.retry_failed, state="disabled"
+    )
+    app.retry_button.pack(side=tk.RIGHT, padx=(0, 6))
     ttk.Label(root, textvariable=app.status, style="Status.TLabel").grid(
         row=5, column=0, sticky="w", pady=(8, 6)
     )

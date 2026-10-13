@@ -2,13 +2,14 @@
 HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX 변환.
 확장자를 자동 감지하여 내부 blocks 구조로 정규화한 뒤 HWP COM으로 저장.
 """
-__version__ = '2026.10.04'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
+__version__ = '2026.10.13'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
 
 from pathlib import Path
 import argparse
 import contextvars
 import copy
 import csv
+import hashlib
 import json
 import os
 import re
@@ -19,6 +20,7 @@ import zipfile
 import tempfile
 import shutil
 import xml.etree.ElementTree as ET
+from urllib.parse import unquote
 from collections.abc import Callable
 from typing import assert_never
 
@@ -235,9 +237,11 @@ def _bullet_depth(raw_line, last_official_depth, heading_level=0):
     return min(base + indent_levels, OFFICIAL_LIST_MAX_DEPTH)
 
 
-def parse_markdown(text):
+def parse_markdown(text, source_dir=None):
+    source_text = text
     lines = text.splitlines()
     blocks = []
+    inserted_images = 0
     i = 0
     in_front = False
     current_heading_level = 0  # tracks last seen # heading depth
@@ -267,6 +271,16 @@ def parse_markdown(text):
                 continue
 
         if in_front:
+            i += 1
+            continue
+
+        if source_dir is not None and _MD_IMAGE_PATTERN.fullmatch(line.strip()):
+            match = re.fullmatch(r'!\[([^\]]*)\]\((.*)\)', line.strip())
+            image_block = _markdown_image_block(match.group(2), source_dir)
+            if image_block is not None:
+                image_block['alt'] = match.group(1)
+                blocks.append(image_block)
+                inserted_images += 1
             i += 1
             continue
 
@@ -374,12 +388,59 @@ def parse_markdown(text):
             blocks.append({'type': 'p', 'text': t})
         i += 1
 
-    images, links = _markdown_media_counts(text)
-    if images:
-        _add_conversion_note(f'[확인 필요] Markdown 이미지 {images}개 미삽입(이미지 삽입 미지원) — 필요 시 한글에서 직접 삽입')
+    images, links = _markdown_media_counts(source_text)
+    missing_images = max(0, images - inserted_images)
+    if missing_images:
+        if source_dir is None:
+            _add_conversion_note(f'[확인 필요] Markdown 이미지 {missing_images}개 미삽입(이미지 삽입 미지원) — 필요 시 한글에서 직접 삽입')
+        else:
+            _add_conversion_note(f'[확인 필요] Markdown 이미지 {missing_images}개 미삽입 — 인라인·외부 URL·지원하지 않는 이미지 또는 누락 파일 확인')
     if links:
         _add_conversion_note(f'[참고] Markdown 링크 {links}개는 표시 텍스트만 유지(URL 제외)')
     return blocks
+
+
+def _image_size_mm(blob, width_mm=None, height_mm=None):
+    """Read local raster metadata without downloading or executing content."""
+    from docx.image.image import Image
+
+    if len(blob) > 32 * 1024 * 1024:
+        raise ValueError('이미지 파일 크기가 32 MiB를 초과했습니다.')
+    image = Image.from_blob(blob)
+    if image.ext.lower() not in ('png', 'jpg', 'jpeg', 'gif', 'bmp', 'tif', 'tiff'):
+        raise ValueError('지원하지 않는 이미지 형식입니다.')
+    width = float(width_mm or (image.px_width * 25.4 / max(1, image.horz_dpi)))
+    height = float(height_mm or (image.px_height * 25.4 / max(1, image.vert_dpi)))
+    if width <= 0 or height <= 0:
+        raise ValueError('이미지 크기가 올바르지 않습니다.')
+    scale = min(1.0, 170.0 / width, 230.0 / height)
+    return width * scale, height * scale, image.ext.lower()
+
+
+def _markdown_image_block(target, source_dir):
+    target = target.strip()
+    if target.startswith('<') and '>' in target:
+        target = target[1:target.index('>')]
+    else:
+        target = re.sub(r'\s+[\"\'].*[\"\']\s*$', '', target)
+    target = unquote(target)
+    # UNC paths and URL schemes may initiate remote access even without HTTP.
+    if target.startswith(('//', '\\\\')) or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]+:', target) and not re.match(r'^[a-zA-Z]:[\\/]', target):
+        return None
+    try:
+        path = Path(target).expanduser()
+        if not path.is_absolute():
+            path = Path(source_dir) / path
+        path = path.resolve()
+        if str(path).startswith(('//', '\\\\')) or not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
+            return None
+        width, height, _ = _image_size_mm(path.read_bytes())
+    except (OSError, ValueError, ImportError, KeyError):
+        return None
+    except Exception:
+        # python-docx reports unsupported/corrupt raster headers with custom errors.
+        return None
+    return {'type': 'image', 'path': str(path), 'width_mm': width, 'height_mm': height}
 
 
 def _markdown_media_counts(text):
@@ -1568,7 +1629,106 @@ def _docx_table_grid(table):
     return normalized, [span for span in merged_cells if span[2] > 1 or span[3] > 1]
 
 
-def parse_docx(docx_path):
+def _iter_docx_content_nodes(element):
+    """Select one OOXML compatibility branch instead of duplicating fallback."""
+    mc = '{http://schemas.openxmlformats.org/markup-compatibility/2006}'
+    if element.tag == mc + 'AlternateContent':
+        choices = [child for child in element if child.tag == mc + 'Choice']
+        selected = next((child for child in choices if any(
+            node.tag == '{http://schemas.openxmlformats.org/drawingml/2006/main}blip'
+            for node in child.iter()
+        )), None)
+        if selected is None:
+            selected = next((child for child in element if child.tag == mc + 'Fallback'), None)
+        if selected is None and choices:
+            selected = choices[0]
+        if selected is not None:
+            yield from _iter_docx_content_nodes(selected)
+        return
+    yield element
+    for child in element:
+        yield from _iter_docx_content_nodes(child)
+
+
+def _docx_paragraph_segments(para, asset_dir=None):
+    """Yield text and embedded raster images in their original run order."""
+    from docx.oxml.ns import qn
+
+    text_parts = []
+    for node in _iter_docx_content_nodes(para._p):
+        if node.tag == qn('w:t'):
+            text_parts.append(node.text or '')
+        elif node.tag in (qn('w:tab'), qn('w:ptab')):
+            text_parts.append('\t')
+        elif node.tag == qn('w:noBreakHyphen'):
+            text_parts.append('-')
+        elif node.tag == qn('w:cr') or (node.tag == qn('w:br') and node.get(qn('w:type'), 'textWrapping') == 'textWrapping'):
+            text_parts.append('\n')
+        elif node.tag in (qn('a:blip'), '{urn:schemas-microsoft-com:vml}imagedata'):
+            text = ''.join(text_parts).strip()
+            text_parts = []
+            if text:
+                yield text
+            rel_id = node.get(qn('r:embed')) or node.get(qn('r:id'))
+            if not rel_id:
+                _add_conversion_note('[확인 필요] DOCX 외부 연결 이미지는 다운로드하지 않습니다.')
+                continue
+            rel = para.part.rels.get(rel_id)
+            if rel is None or rel.is_external:
+                _add_conversion_note('[확인 필요] DOCX 이미지 관계가 누락되었거나 외부 연결입니다.')
+                continue
+            try:
+                blob = rel.target_part.blob
+                width_mm = height_mm = None
+                ancestor = node
+                while ancestor is not None and ancestor.tag != qn('w:drawing'):
+                    ancestor = ancestor.getparent()
+                if ancestor is not None:
+                    extent = next(ancestor.iter(qn('wp:extent')), None)
+                    if extent is not None:
+                        width_mm = int(extent.get('cx', '0')) / 36000
+                        height_mm = int(extent.get('cy', '0')) / 36000
+                    if next(ancestor.iter(qn('wp:anchor')), None) is not None:
+                        _add_conversion_note('[확인 필요] DOCX 떠 있는 이미지는 본문 순서의 독립 이미지로 배치합니다.')
+                width, height, extension = _image_size_mm(blob, width_mm, height_mm)
+                block = {'type': 'image', 'width_mm': width, 'height_mm': height, 'extension': extension}
+                if asset_dir is None:
+                    block['data'] = blob
+                else:
+                    asset_path = Path(asset_dir) / f'image-{hashlib.sha256(blob).hexdigest()}.{extension}'
+                    if not asset_path.exists():
+                        with asset_path.open('xb') as image_file:
+                            image_file.write(blob)
+                    block['path'] = str(asset_path)
+                yield block
+            except Exception:
+                _add_conversion_note('[확인 필요] DOCX 이미지가 지원하지 않는 형식이거나 손상되어 삽입하지 못했습니다.')
+    text = ''.join(text_parts).strip()
+    if text:
+        yield text
+
+
+def _docx_text_block(para, text):
+    style_name = para.style.name if para.style else ''
+    heading_match = re.match(r'^(?:Heading|제목|머리말)\s*(\d+)$', style_name, re.IGNORECASE)
+    if heading_match:
+        return {'type': 'h', 'level': max(1, min(int(heading_match.group(1)), 3)), 'text': text}
+    depth = _list_depth(para)
+    if depth >= 0:
+        return {'type': 'li', 'text': text, 'depth': min(depth, 7)}
+    if re.search(r'[Qq]uote|인용', style_name):
+        return {'type': 'bq', 'text': text}
+    if re.search(r'[Cc]ode|코드', style_name):
+        return {'type': 'code', 'text': text}
+    if re.match(r'^(수신|경유|제목)\s*:', text):
+        colon_idx = text.index(':')
+        return {'type': 'official_header', 'key': text[:colon_idx].strip(), 'value': text[colon_idx + 1:].strip()}
+    if re.search(r'[Hh]orizontal|구분선', style_name):
+        return {'type': 'hr'}
+    return {'type': 'p', 'text': text}
+
+
+def parse_docx(docx_path, asset_dir=None):
     try:
         from docx import Document
         from docx.table import Table as DocxTable
@@ -1589,61 +1749,65 @@ def parse_docx(docx_path):
             block = {'type': 'table', 'header': header, 'rows': rows, 'table_source': 'docx'}
             if merged_cells:
                 block['merged_cells'] = merged_cells
+            from docx.oxml.ns import qn
+            if any(node.tag in (qn('w:drawing'), qn('w:pict')) for node in item._tbl.iter()):
+                _add_conversion_note('[확인 필요] DOCX 표 셀 내부 이미지는 삽입하지 않습니다. 원본과 대조하세요.')
             blocks.append(block)
             continue
-
-        para = item
-        style_name = para.style.name if para.style else ''
-        text = _para_text(para)
-
-        if not text:
-            continue
-
-        heading_match = re.match(r'^(?:Heading|제목|머리말)\s*(\d+)$', style_name, re.IGNORECASE)
-        if heading_match:
-            level = max(1, min(int(heading_match.group(1)), 3))
-            blocks.append({'type': 'h', 'level': level, 'text': text})
-            continue
-
-        depth = _list_depth(para)
-        if depth >= 0:
-            blocks.append({'type': 'li', 'text': text, 'depth': min(depth, 7)})
-            continue
-
-        if re.search(r'[Qq]uote|인용', style_name):
-            blocks.append({'type': 'bq', 'text': text})
-            continue
-
-        if re.search(r'[Cc]ode|코드', style_name):
-            blocks.append({'type': 'code', 'text': text})
-            continue
-
-        if re.match(r'^(수신|경유|제목)\s*:', text):
-            colon_idx = text.index(':')
-            key = text[:colon_idx].strip()
-            value = text[colon_idx + 1:].strip()
-            blocks.append({'type': 'official_header', 'key': key, 'value': value})
-            continue
-
-        if re.search(r'[Hh]orizontal|구분선', style_name):
-            blocks.append({'type': 'hr'})
-            continue
-
-        blocks.append({'type': 'p', 'text': text})
+        segments = list(_docx_paragraph_segments(item, asset_dir=asset_dir))
+        if any(isinstance(segment, dict) for segment in segments) and any(isinstance(segment, str) for segment in segments):
+            _add_conversion_note('[참고] DOCX 인라인 이미지와 텍스트는 순서대로 독립 단락에 배치합니다.')
+        for segment in segments:
+            blocks.append(segment if isinstance(segment, dict) else _docx_text_block(item, segment))
 
     return blocks
 
 
 # ─── 확장자 자동 감지 ──────────────────────────────────────────────────────────
 
-def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None, doc_type='plan'):
+def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None, doc_type='plan', input_engine='native', kordoc_package=None):
     if doc_type not in _DOC_TYPES:
         raise ValueError(f'지원하지 않는 문서 유형: {doc_type} (지원: {", ".join(_DOC_TYPES)})')
     token = _ALLOW_ROMAN_LEVEL.set(doc_type != 'sihaengmun')
     try:
+        if input_engine == 'kordoc':
+            return parse_kordoc_document(file_path, package_dir=kordoc_package)
+        if input_engine != 'native':
+            raise ValueError(f'지원하지 않는 입력 엔진: {input_engine}')
         return _parse_by_extension(file_path, kordoc_home=kordoc_home, pdf_mode=pdf_mode, asset_dir=asset_dir)
     finally:
         _ALLOW_ROMAN_LEVEL.reset(token)
+
+
+def parse_kordoc_document(file_path, package_dir=None):
+    # Optional dependency is imported only for this explicitly selected path.
+    from document_ir import KORDOC_INPUT_EXTENSIONS, kordoc_to_blocks
+    from kordoc_client import KordocClient
+
+    path = as_path(file_path)
+    require_file(path)
+    _conversion_notes.clear()
+    if path.suffix.lower() not in KORDOC_INPUT_EXTENSIONS:
+        raise ValueError('kordoc 입력 엔진이 지원하지 않는 형식입니다: ' + path.suffix)
+    response = KordocClient(package_dir=package_dir).request('parse', path=str(path))
+    if response.get('status') not in ('success', 'partial') or not response.get('data'):
+        error = response.get('error') or {}
+        raise RuntimeError('kordoc 읽기 실패: ' + str(error.get('message') or response.get('status')))
+    blocks, warnings = kordoc_to_blocks(response['data'])
+    # Parser warnings may quote document content; regular conversion logs only
+    # carry codes. Full details remain in the explicitly requested parse report.
+    for warning in response.get('warnings', []):
+        code = warning.get('code', 'WARNING') if isinstance(warning, dict) else 'WARNING'
+        safe_code = re.sub(r'[^A-Za-z0-9_-]', '', str(code))[:80] or 'WARNING'
+        _add_conversion_note(f'[확인 필요] kordoc 읽기 경고({safe_code}) — 세부 내용은 문서 도구의 읽기 보고서에서 확인하세요.')
+    for warning in warnings:
+        _add_conversion_note('[확인 필요] ' + str(warning))
+    if response.get('status') == 'partial':
+        _add_conversion_note('[확인 필요] kordoc이 일부 읽기만 완료했습니다. 원본과 대조하세요.')
+    _add_conversion_note('[참고] kordoc 문서를 기관 기본 서식으로 재구성합니다. 원본 서식 보존 편집은 문서 도구의 패치를 사용하세요.')
+    if not blocks:
+        raise RuntimeError('kordoc 결과에 변환할 본문·표가 없습니다.')
+    return blocks
 
 
 def _parse_by_extension(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=None):
@@ -1655,11 +1819,11 @@ def _parse_by_extension(file_path, kordoc_home=None, pdf_mode='layout', asset_di
         supported = ', '.join(sorted(SUPPORTED_EXTENSIONS))
         raise ValueError(f'지원하지 않는 형식: {ext}  (지원: {supported})')
     if ext == '.md':
-        return parse_markdown(read_text_file(path))
+        return parse_markdown(read_text_file(path), source_dir=path.parent)
     if ext == '.txt':
         return parse_plain_text(read_text_file(path))
     if ext == '.docx':
-        return parse_docx(str(path))
+        return parse_docx(str(path), asset_dir=asset_dir)
     if ext in ('.html', '.htm'):
         return parse_html(read_text_file(path))
     if ext == '.csv':
@@ -2560,6 +2724,33 @@ def insert_pdf_page_images(hwp, pages):
 
 # ─── 문서 빌드 ─────────────────────────────────────────────────────────────────
 
+def insert_body_image(hwp, block):
+    """Embed a raster image using the proven PDF picture insertion contract."""
+    def insert(path):
+        if not path.is_file():
+            raise FileNotFoundError('본문 이미지 파일이 없습니다: ' + str(path))
+        width, height = float(block['width_mm']), float(block['height_mm'])
+        if not 0 < width <= 170 or not 0 < height <= 230:
+            raise ValueError('본문 이미지 크기가 인쇄 영역을 벗어났습니다.')
+        result = hwp.InsertPicture(str(path), True, 1, False, False, 0, width, height)
+        _require_hwp_success(result, 'InsertPicture(body image)')
+
+    if block.get('path'):
+        insert(Path(block['path']))
+    elif isinstance(block.get('data'), bytes):
+        # Direct parse_docx/build_doc callers may use in-memory image blocks.
+        # convert_file supplies a private asset folder lasting through SaveAs.
+        extension = block.get('extension', 'png')
+        if extension not in ('png', 'jpg', 'jpeg', 'gif', 'bmp', 'tif', 'tiff'):
+            raise ValueError('지원하지 않는 본문 이미지 형식입니다.')
+        with tempfile.TemporaryDirectory(prefix='anyway-to-hwpx-image-') as directory:
+            path = Path(directory) / ('image.' + extension)
+            path.write_bytes(block['data'])
+            insert(path)
+    else:
+        raise ValueError('본문 이미지 데이터가 없습니다.')
+
+
 def build_doc(hwp, blocks, doc_type='plan'):
     first_depth1_li_seen = False
     col_width_supported = True  # TableColWidth 미지원 확인 후에는 표마다 재시도하지 않음
@@ -2624,6 +2815,11 @@ def build_doc(hwp, blocks, doc_type='plan'):
             set_para_shape(hwp, align=3)
             set_char_shape(hwp, height=1000, font='body')
             insert_text(hwp, '─' * 30)
+            break_para(hwp)
+
+        elif t == 'image':
+            set_para_shape(hwp, align=3)
+            insert_body_image(hwp, blk)
             break_para(hwp)
 
         elif t == 'table':
@@ -2986,8 +3182,12 @@ def write_output_manifest(output_dir, output_files):
     )
 
 
-def prepare_output_dir(output_dir, empty_output_folder=False):
+def prepare_output_dir(output_dir, empty_output_folder=False, protected_paths=()):
     out_dir = as_path(output_dir)
+    if empty_output_folder:
+        for protected in protected_paths:
+            if as_path(protected).is_relative_to(out_dir):
+                raise ValueError('입력 원본이 출력 정리 폴더 안에 있습니다. --empty-output-folder를 사용할 수 없습니다.')
     out_dir.mkdir(parents=True, exist_ok=True)
     if not empty_output_folder:
         return out_dir
@@ -3048,9 +3248,13 @@ def convert_file(
     pdf_mode='layout',
     doc_type='plan',
     official=False,
+    input_engine='native',
+    kordoc_package=None,
 ):
     src = as_path(src_path)
     out = as_path(hwpx_path)
+    if src == out or (out.exists() and src.exists() and os.path.samefile(src, out)):
+        raise ValueError('입력 원본을 덮어쓸 수 없습니다. 새 HWPX 경로를 선택하세요.')
     selected_pdf_mode = parse_pdf_mode(pdf_mode)
     if diagnose_stage:
         diagnose_stage('parse_source')
@@ -3134,15 +3338,23 @@ def convert_file(
             diagnose_stage('finalize')
         return {'notes': notes}
 
-    if is_pdf and selected_pdf_mode is PdfMode.LAYOUT:
+    engine_options = {} if input_engine == 'native' and kordoc_package is None else {
+        'input_engine': input_engine, 'kordoc_package': kordoc_package,
+    }
+    needs_assets = input_engine == 'native' and (
+        (is_pdf and selected_pdf_mode is PdfMode.LAYOUT) or src.suffix.lower() == '.docx'
+    )
+    if needs_assets:
         temp_parent = str(out.parent) if out.parent.is_dir() else None
-        with tempfile.TemporaryDirectory(prefix='anyway-to-hwpx-pdf-', dir=temp_parent) as temp_dir:
+        prefix = 'anyway-to-hwpx-pdf-' if is_pdf else 'anyway-to-hwpx-docx-'
+        with tempfile.TemporaryDirectory(prefix=prefix, dir=temp_parent) as temp_dir:
             parsed = detect_and_parse(
                 src,
                 kordoc_home=kordoc_home,
                 pdf_mode=selected_pdf_mode.value,
                 asset_dir=Path(temp_dir),
                 doc_type=doc_type,
+                **engine_options,
             )
             result = convert_loaded(parsed)
     else:
@@ -3151,6 +3363,7 @@ def convert_file(
             kordoc_home=kordoc_home,
             pdf_mode=selected_pdf_mode.value,
             doc_type=doc_type,
+            **engine_options,
         )
         result = convert_loaded(parsed)
     ext = src.suffix.upper().lstrip('.')
@@ -3185,6 +3398,8 @@ def main(argv=None):
         help='PDF 변환 모드: 페이지 이미지 보존 또는 편집 가능한 텍스트 (default: layout)',
     )
     parser.add_argument('--kordoc-home', default=None, help='스캔 PDF OCR용 kordoc-ai 경로 (또는 KORDOC_HOME 환경변수)')
+    parser.add_argument('--input-engine', choices=['native', 'kordoc'], default='native', help='입력 읽기 엔진 (기본: 기존 native 경로)')
+    parser.add_argument('--kordoc-package', default=None, help='선택 설치한 kordoc 패키지 경로 (--input-engine kordoc)')
     parser.add_argument('--_preflight-worker', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--_preflight-visible', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -3198,7 +3413,11 @@ def main(argv=None):
             return 2
 
     if args.list_formats:
-        print('지원 입력 형식: ' + ', '.join(sorted(SUPPORTED_EXTENSIONS)))
+        formats = SUPPORTED_EXTENSIONS
+        if args.input_engine == 'kordoc':
+            from document_ir import KORDOC_INPUT_EXTENSIONS
+            formats = KORDOC_INPUT_EXTENSIONS
+        print('지원 입력 형식: ' + ', '.join(sorted(formats)))
         return 0
 
     if args.preflight:
@@ -3217,7 +3436,7 @@ def main(argv=None):
     hwp = None
     failures = []
     try:
-        prepared_output_dir = prepare_output_dir(args.output_dir, args.empty_output_folder) if args.output_dir else None
+        prepared_output_dir = prepare_output_dir(args.output_dir, args.empty_output_folder, protected_paths=args.files) if args.output_dir else None
         print('HWP 실행 중...')
         try:
             hwp = create_hwp_object(visible=True, warn=lambda message: print(f'  {message}', file=sys.stderr))
@@ -3246,6 +3465,8 @@ def main(argv=None):
                     pdf_mode=args.pdf_mode,
                     doc_type=args.doc_type,
                     official=args.official,
+                    input_engine=args.input_engine,
+                    kordoc_package=args.kordoc_package,
                 )
                 for note in (result or {}).get('notes', []):
                     print(f'  {note}', file=sys.stderr)

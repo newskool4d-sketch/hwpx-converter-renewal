@@ -1,0 +1,10 @@
+{
+  "name": "hwpx-converter-document-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional local-only document tools for HWPX Converter",
+  "dependencies": {
+    "kordoc": "4.21.30",
+    "pdfjs-dist": "4.10.38"
+  }
+}

@@ -14,3 +14,7 @@ handoff.md
 
 # 개발 워크플로 메타데이터 (task ledger·evidence·QA 스크린샷)
 .omo/
+
+# Version-pinned optional document tools; manifests stay in Git.
+node_modules/
+deps/kordoc/.npm-cache/

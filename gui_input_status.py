@@ -43,8 +43,12 @@ def _offer_output_folder(app, title: str, message: str) -> None:
 
 
 def finish_conversion(app, completed, failures, warned=()) -> None:
+    app.failed_files = [target for target, _error in failures if target != "HWP 실행"]
     app.progress.configure(value=completed)
     app._set_busy(False)
+    if app.__dict__.get("_cancelled", False):
+        app.status.set(f"취소됨 · 완료 {completed}개 · 미완료 {len(failures)}개 — 재시도할 수 있습니다")
+        return
     if failures:
         app.status.set(f"완료 {completed}개 · 실패 {len(failures)}개")
         lines = [

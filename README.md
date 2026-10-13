@@ -4,11 +4,15 @@
 
 Markdown, TXT, DOCX, HTML, CSV, XLSX, and PDF files can be converted to HWPX through Hancom HWP COM automation.
 
+Version 2026.10.13 adds optional local document tools (read, compare, patch, fill, validate and preview), per-file cancellation and failed-file retry. See the [installation and usage guide (Korean)](docs/document-tools.md). Existing conversion does not require kordoc.
+
 ## Download
 
 Get the standalone GUI executable from the [latest release](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/latest):
 
 - **`anyway_to_hwpx_gui.exe`** — no installation required (Windows 64-bit, Hancom Office HWP must be installed)
+- **`hwpx-converter-v2026.10.13-windows-x64.zip`** — the EXE, pinned document-tools dependencies and usage guide. Extract the complete archive before running. Document tools require an existing Node.js 20+ installation.
+- **`SHA256SUMS.txt`** — checksums for the release assets.
 
 Download it, run it, select source files, choose an output folder, and start conversion.
 

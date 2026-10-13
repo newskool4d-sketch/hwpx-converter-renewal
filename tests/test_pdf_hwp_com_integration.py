@@ -87,8 +87,12 @@ class PdfHwpComIntegrationTests(unittest.TestCase):
                 source_bounds = _nonwhite_bounds(source_pix)
                 output_bounds = _nonwhite_bounds(output_pix)
                 assert all(abs(left - right) <= 2 for left, right in zip(source_bounds, output_bounds))
-                count = min(len(source_pix.samples), len(output_pix.samples))
-                error = sum(abs(source_pix.samples[index] - output_pix.samples[index]) for index in range(count)) / (count * 255)
+                # Pixmap.samples returns a fresh bytes copy; fetch each image
+                # once so the pixel comparison stays linear in image size.
+                source_samples = source_pix.samples
+                output_samples = output_pix.samples
+                count = min(len(source_samples), len(output_samples))
+                error = sum(abs(source_samples[index] - output_samples[index]) for index in range(count)) / (count * 255)
                 assert error <= 0.05
 
 

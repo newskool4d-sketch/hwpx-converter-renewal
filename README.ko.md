@@ -4,11 +4,15 @@
 
 Markdown, TXT, DOCX, HTML, CSV, XLSX, PDF 파일을 한컴 HWP COM 자동화를 통해 HWPX로 변환합니다.
 
+2026.10.13부터 선택형 **문서 도구**(HWP/HWPX 읽기·비교·수정·양식 채우기·미리보기)와 변환 취소·실패 재시도를 제공합니다. [설치 및 사용 안내](docs/document-tools.md)를 참고하세요. 기본 변환은 kordoc 없이도 사용할 수 있습니다.
+
 ## 다운로드
 
 [최신 릴리스](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/latest)에서 GUI 실행 파일을 내려받을 수 있습니다:
 
 - **`anyway_to_hwpx_gui.exe`** — 설치 불필요 (Windows 64bit, 한컴오피스 한글 설치 필수)
+- **`hwpx-converter-v2026.10.13-windows-x64.zip`** — 위 EXE와 문서 도구 전용 의존성·사용 안내 포함. 전체 압축을 풀어 실행하세요. 문서 도구에는 별도로 설치된 Node.js 20 이상이 필요합니다.
+- **`SHA256SUMS.txt`** — 배포 파일 무결성 확인용 해시.
 
 내려받아 실행한 뒤 원본 파일 선택 → 저장 폴더 지정 → 변환 시작 순서로 사용하면 됩니다.
 
