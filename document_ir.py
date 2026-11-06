@@ -121,7 +121,6 @@ def kordoc_to_blocks(document: Mapping) -> tuple[list[dict], list[str]]:
                 list_depth = max(0, min(list_depth, 7)) if type(list_depth) is int else min(depth, 7)
                 if text:
                     result.append({'type': 'li', 'text': text, 'depth': list_depth})
-                walk(block.get('children') or [], depth + 1)
             elif kind == 'separator':
                 result.append({'type': 'hr'})
             elif kind == 'image':
@@ -130,6 +129,8 @@ def kordoc_to_blocks(document: Mapping) -> tuple[list[dict], list[str]]:
                 warn(f'지원하지 않는 kordoc 블록 유형: {kind!r}. 추출 텍스트만 유지합니다.')
                 if text:
                     result.append({'type': 'p', 'text': text})
+            # Any block type may nest children; dropping them loses body text.
+            walk(block.get('children') or [], depth + 1)
             if block.get('footnoteText'):
                 result.append({'type': 'p', 'text': str(block['footnoteText'])})
                 warn('각주·미주는 해당 블록 다음 본문으로 배치합니다.')

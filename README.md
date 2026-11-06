@@ -4,16 +4,16 @@
 
 Convert Markdown, TXT, DOCX, HTML, CSV, XLSX, and PDF into HWPX through Hancom HWP COM automation. Use the desktop GUI for conversion, or open its local document tools to read, compare, validate, preview, and edit existing documents.
 
-**[Version 2026.10.13](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.10.13)** adds document tools powered by kordoc, conversion cancellation, per-file time limits, and failed-file retry. The existing conversion engine and document templates remain available without kordoc.
+**[Version 2026.11.06](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.11.06)** fixes the document tools' cancel button, retry with a changed time limit, saving edited copies to drives without hard links (such as Google Drive or exFAT), preview checks on mapped drives, and text lost from DOCX text boxes and nested kordoc blocks. [Version 2026.10.13](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.10.13) added document tools powered by kordoc, conversion cancellation, per-file time limits, and failed-file retry. The existing conversion engine and document templates remain available without kordoc.
 
 ## Download
 
 | Download | Use it for |
 | --- | --- |
-| **[Windows x64 ZIP — recommended](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.10.13/hwpx-converter-v2026.10.13-windows-x64.zip)** | Conversion **and document tools**. Includes the EXE, pinned document-tool dependencies, and guides. Extract the entire archive. |
-| [Standalone EXE](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.10.13/anyway_to_hwpx_gui.exe) | Basic conversion. Document-tool dependencies and Node.js are not bundled in this file. |
-| [SHA256SUMS.txt](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.10.13/SHA256SUMS.txt) | Verify downloaded files with SHA-256. |
-| [release-manifest.json](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.10.13/release-manifest.json) | Source commit, dependency versions, build information, and release test results. |
+| **[Windows x64 ZIP — recommended](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.11.06/hwpx-converter-v2026.11.06-windows-x64.zip)** | Conversion **and document tools**. Includes the EXE, pinned document-tool dependencies, and guides. Extract the entire archive. |
+| [Standalone EXE](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.11.06/anyway_to_hwpx_gui.exe) | Basic conversion. Document-tool dependencies and Node.js are not bundled in this file. |
+| [SHA256SUMS.txt](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.11.06/SHA256SUMS.txt) | Verify downloaded files with SHA-256. |
+| [release-manifest.json](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.11.06/release-manifest.json) | Source commit, dependency versions, build information, and release test results. |
 
 The ZIP includes **kordoc 4.21.30** and **pdfjs-dist 4.10.38**. It does not include Node.js or Hancom Office. ZIP users do not need to run `npm install`.
 
@@ -184,7 +184,7 @@ The installer pins dependencies in `deps/kordoc`, uses the lockfile when availab
 
 ### Verification
 
-The [v2026.10.13 release](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.10.13) passed **399 checks, with no skips**, including actual Hancom PDF integration. Its release notes describe sample output comparisons and packaged-app checks; these are results from the verification PC, not a guarantee for every Windows environment.
+The [v2026.11.06 release](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.11.06) passed **all 405 source checks**, including the actual Hancom PDF integration check run separately with `HWPX_RUN_COM_TESTS=1`. Each fix has a regression test that fails on 2026.10.13 code. The [v2026.10.13 release](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.10.13) passed **399 checks, with no skips**, including actual Hancom PDF integration. Its release notes describe sample output comparisons and packaged-app checks; these are results from the verification PC, not a guarantee for every Windows environment.
 
 ```powershell
 python -m unittest discover -s tests

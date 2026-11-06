@@ -59,7 +59,10 @@ function inputFile(value, limit = INPUT_LIMIT) {
       throw fail('INPUT_CHANGED', '미리보기 입력 정보가 올바르지 않습니다. 다시 미리보기 하세요.');
     }
     const canonical = name => process.platform === 'win32' ? path.resolve(name).toLowerCase() : path.resolve(name);
-    const entry = Object.entries(expected).find(([name]) => canonical(name) === canonical(resolved));
+    // Match the path as requested as well as its real path: callers key by the
+    // string they send, which may be a mapped drive the real path rewrites.
+    const wanted = new Set([canonical(value), canonical(resolved)]);
+    const entry = Object.entries(expected).find(([name]) => wanted.has(canonical(name)));
     if (!entry || typeof entry[1] !== 'string' || !/^[a-f0-9]{64}$/i.test(entry[1]) || hash(bytes) !== entry[1].toLowerCase()) {
       throw fail('INPUT_CHANGED', '미리보기 후 입력 파일이 변경되었습니다. 다시 미리보기 하세요.');
     }
@@ -93,13 +96,33 @@ function outputPath(value, source, expectedExtension = '.hwpx') {
   return resolved;
 }
 
+function writeExclusive(destination, bytes) {
+  const fd = fs.openSync(destination, 'wx', 0o600);
+  let complete = false;
+  try {
+    fs.writeFileSync(fd, bytes);
+    fs.fsyncSync(fd);
+    complete = true;
+  } finally {
+    fs.closeSync(fd);
+    if (!complete) fs.rmSync(destination, { force: true });
+  }
+}
+
 function saveExclusive(destination, bytes) {
   // Hard-link publication is atomic and fails if another writer claimed the name.
   const stage = path.join(path.dirname(destination), `.kordoc-${randomUUID()}.tmp`);
   try {
     const fd = fs.openSync(stage, 'wx', 0o600);
     try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    fs.linkSync(stage, destination);
+    try {
+      fs.linkSync(stage, destination);
+    } catch (error) {
+      // Google Drive, exFAT/FAT32 and some shares lack hard links. Fall back
+      // to exclusive creation, which still refuses an existing file.
+      if (error?.code === 'EEXIST') throw error;
+      writeExclusive(destination, bytes);
+    }
   } finally {
     if (fs.existsSync(stage)) fs.unlinkSync(stage);
   }

@@ -81,6 +81,13 @@ class DocumentIRTests(unittest.TestCase):
         self.assertEqual(blocks[0]['level'], 3)
         self.assertEqual(blocks[1]['depth'], 2)
 
+    def test_children_of_non_list_blocks_are_not_dropped(self):
+        blocks, _ = kordoc_to_blocks({'blocks': [
+            {'type': 'paragraph', 'text': '상위', 'children': [{'type': 'paragraph', 'text': '하위 문단'}]},
+            {'type': 'section', 'children': [{'type': 'heading', 'level': 2, 'text': '하위 제목'}]},
+        ]})
+        self.assertEqual([block.get('text') for block in blocks], ['상위', '하위 문단', '하위 제목'])
+
     def test_native_extensions_are_unchanged_and_new_formats_require_opt_in(self):
         self.assertNotIn('.hwpx', converter.SUPPORTED_EXTENSIONS)
         self.assertTrue({'.hwpx', '.hwp', '.hwpml', '.xls', '.pptx'} <= KORDOC_INPUT_EXTENSIONS)

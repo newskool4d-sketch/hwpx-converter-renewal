@@ -131,6 +131,64 @@ export async function fillHwpx(){return {buffer:Buffer.from('filled'),filled:[],
                 self.assertTrue(any(w.get("code") == "UNSUPPORTED_ELEMENT" for w in result["warnings"] if isinstance(w, dict)))
                 self.assertFalse(output.exists())
 
+    def _editing_stub(self):
+        self.client.bridge_path = ROOT / "kordoc_bridge.mjs"
+        (self.package / "package.json").write_text('{"name":"kordoc","type":"module","version":"test"}', encoding="utf-8")
+        (self.package / "dist" / "index.js").write_text("""
+export async function parse() {return {success:true,markdown:'text',blocks:[],warnings:[]};}
+export function diffBlocks(){return {stats:{added:0,removed:0,modified:0,unchanged:0},diffs:[]};}
+export async function validateHwpx(){return {ok:true,issues:[],entryCount:1};}
+export async function patchHwpx(){return {success:true,data:Buffer.from('patched'),applied:1,skipped:[],verification:diffBlocks()};}
+""", encoding="utf-8")
+        markdown = self.directory / "edit.md"
+        markdown.write_text("text", encoding="utf-8")
+        return markdown
+
+    def test_save_falls_back_when_the_drive_has_no_hard_links(self):
+        markdown = self._editing_stub()
+        wrapper = self.directory / "no-hard-links.mjs"
+        wrapper.write_text(
+            "import fs from 'node:fs'; import { syncBuiltinESMExports } from 'node:module';\n"
+            "import { pathToFileURL } from 'node:url';\n"
+            "fs.linkSync = () => { throw Object.assign(new Error('no hard links'), { code: 'EPERM' }); };\n"
+            "syncBuiltinESMExports();\n"
+            f"await import(pathToFileURL({json.dumps(str(ROOT / 'kordoc_bridge.mjs'))}).href);\n",
+            encoding="utf-8")
+        self.client.bridge_path = wrapper
+        source = self.directory / "source.hwpx"
+        source.write_bytes(b"source")
+        output = self.directory / "result.hwpx"
+        result = self.client.request("patch", path=source, markdown_file=markdown, output=output, dry_run=False)
+        self.assertEqual(result["status"], "success", result)
+        self.assertEqual(output.read_bytes(), b"patched")
+        self.assertEqual(sorted(p.name for p in self.directory.glob(".kordoc-*")), [])
+        again = self.client.request("patch", path=source, markdown_file=markdown, output=output, dry_run=False)
+        self.assertEqual(again["error"]["code"], "OUTPUT_EXISTS")
+        self.assertEqual(output.read_bytes(), b"patched")
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction")
+    def test_fingerprints_keyed_by_requested_path_match_when_real_path_differs(self):
+        import _winapi
+
+        markdown = self._editing_stub()
+        real = self.directory / "real"
+        real.mkdir()
+        alias = self.directory / "alias"
+        _winapi.CreateJunction(str(real), str(alias))
+        self.addCleanup(os.rmdir, alias)
+        (real / "source.hwpx").write_bytes(b"source")
+        source = alias / "source.hwpx"
+        digest = lambda file: hashlib.sha256(file.read_bytes()).hexdigest()
+        expected = {os.path.abspath(source): digest(source), os.path.abspath(markdown): digest(markdown)}
+        output = self.directory / "aliased.hwpx"
+        result = self.client.request("patch", path=str(source), markdown_file=str(markdown), output=output,
+                                     dry_run=False, expected_fingerprints=expected)
+        self.assertEqual(result["status"], "success", result)
+        stale = {**expected, os.path.abspath(source): "0" * 64}
+        result = self.client.request("patch", path=str(source), markdown_file=str(markdown),
+                                     output=self.directory / "stale.hwpx", dry_run=False, expected_fingerprints=stale)
+        self.assertEqual(result["error"]["code"], "INPUT_CHANGED", result)
+
 
 @unittest.skipUnless(NODE, "Node.js unavailable")
 class KordocIntegrationTests(unittest.TestCase):

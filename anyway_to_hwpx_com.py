@@ -2,7 +2,7 @@
 HWP COM 자동화로 Markdown / TXT / DOCX / HTML / CSV / XLSX / PDF → HWPX 변환.
 확장자를 자동 감지하여 내부 blocks 구조로 정규화한 뒤 HWP COM으로 저장.
 """
-__version__ = '2026.10.13'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
+__version__ = '2026.11.06'  # 릴리스 시 태그 날짜(YYYY.MM.DD)로 갱신, 릴리스 사이 개발 중에는 +dev
 
 from pathlib import Path
 import argparse
@@ -1542,19 +1542,6 @@ def _iter_block_items(doc):
             yield DocxTable(child, doc)
 
 
-def _para_text(para):
-    from docx.oxml.ns import qn
-    parts = []
-    for run in para.runs:
-        has_image = (
-            run._r.find(qn('w:drawing')) is not None
-            or run._r.find(qn('w:pict')) is not None
-        )
-        if not has_image:
-            parts.append(run.text)
-    return ''.join(parts).strip()
-
-
 def _list_depth(para):
     from docx.oxml.ns import qn
     pPr = para._p.pPr
@@ -1646,6 +1633,8 @@ def _iter_docx_content_nodes(element):
             yield from _iter_docx_content_nodes(selected)
         return
     yield element
+    if element.tag == '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}txbxContent':
+        return  # 글상자 문단은 호출자가 독립 단락으로 처리한다.
     for child in element:
         yield from _iter_docx_content_nodes(child)
 
@@ -1664,6 +1653,18 @@ def _docx_paragraph_segments(para, asset_dir=None):
             text_parts.append('-')
         elif node.tag == qn('w:cr') or (node.tag == qn('w:br') and node.get(qn('w:type'), 'textWrapping') == 'textWrapping'):
             text_parts.append('\n')
+        elif node.tag == qn('w:txbxContent'):
+            # Keep text-box paragraphs separate instead of gluing them onto the
+            # anchoring body paragraph.
+            text = ''.join(text_parts).strip()
+            text_parts = []
+            if text:
+                yield text
+            boxed = [''.join(t.text or '' for t in inner.iter(qn('w:t'))).strip() for inner in node.iter(qn('w:p'))]
+            boxed = [line for line in boxed if line]
+            if boxed:
+                _add_conversion_note('[확인 필요] DOCX 글상자 텍스트는 본문 순서의 독립 단락으로 배치합니다.')
+            yield from boxed
         elif node.tag in (qn('a:blip'), '{urn:schemas-microsoft-com:vml}imagedata'):
             text = ''.join(text_parts).strip()
             text_parts = []

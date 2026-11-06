@@ -162,6 +162,9 @@ class ConverterApp(BaseTk):
     def retry_failed(self):
         if self._is_busy() or not self.failed_files or self._last_snapshot_args is None:
             return
+        # A timed-out file is usually retried after raising the limit.
+        if not self._snapshot_timeout():
+            return
         files = tuple(self.failed_files)
         args = list(self._last_snapshot_args)
         args[0] = files
@@ -284,16 +287,23 @@ class ConverterApp(BaseTk):
         pdf_mode = self.pdf_mode.get()
         official = bool(self.official.get())
         doc_type = self.doc_type.get()
-        if "file_timeout_seconds" in self.__dict__:
-            try:
-                timeout = int(self.file_timeout_seconds.get())
-                if not 10 <= timeout <= 3600:
-                    raise ValueError
-            except ValueError:
-                messagebox.showwarning("확인", "파일당 제한 시간은 10~3600초로 입력하세요.")
-                return
-            self._timeout_snapshot = timeout
+        if not self._snapshot_timeout():
+            return
         self._launch_conversion((files, output_dir, empty_output_folder, insert_end_mark, pdf_mode, official, doc_type))
+
+    def _snapshot_timeout(self):
+        """Validate the per-file limit as currently entered; False keeps the run stopped."""
+        if "file_timeout_seconds" not in self.__dict__:
+            return True
+        try:
+            timeout = int(self.file_timeout_seconds.get())
+            if not 10 <= timeout <= 3600:
+                raise ValueError
+        except ValueError:
+            messagebox.showwarning("확인", "파일당 제한 시간은 10~3600초로 입력하세요.")
+            return False
+        self._timeout_snapshot = timeout
+        return True
 
     def _launch_conversion(self, args):
         self.cancel_event = threading.Event()

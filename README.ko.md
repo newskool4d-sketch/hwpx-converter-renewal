@@ -4,18 +4,20 @@
 
 Markdown, TXT, DOCX, HTML, CSV, XLSX, PDF를 **한컴 서식의 HWPX로 변환**하는 Windows 앱입니다. 선택형 로컬 문서 도구로 기존 HWP/HWPX를 읽고, 비교하고, HWPX 수정본과 작성한 양식 사본을 만들 수 있습니다.
 
-[최신 릴리스](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/latest) · [문서 도구 상세 안내](docs/document-tools.md) · [2026.10.13 변경 내용](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.10.13)
+[최신 릴리스](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/latest) · [문서 도구 상세 안내](docs/document-tools.md) · [2026.11.06 변경 내용](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.11.06) · [2026.10.13 변경 내용](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.10.13)
+
+`2026.11.06`은 문서 도구 취소 버튼, 제한 시간을 바꾼 뒤의 재시도, 하드링크를 지원하지 않는 드라이브(Google Drive·exFAT 등)의 수정본 저장, 매핑 드라이브의 미리보기 확인, DOCX 글상자·kordoc 중첩 블록 텍스트 누락을 고친 수정 릴리스입니다.
 
 ## 다운로드
 
 | 필요한 기능 | 다운로드 | 사용 조건 |
 | --- | --- | --- |
-| 변환 + 문서 읽기·비교·수정 **(권장)** | [Windows 전체 ZIP](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.10.13/hwpx-converter-v2026.10.13-windows-x64.zip) | 전체 압축 해제. 문서 도구에는 Node.js 20 이상 필요 |
-| 기존 파일 변환 | [EXE 단일 파일](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.10.13/anyway_to_hwpx_gui.exe) | 변환에는 한컴오피스 한글 필요. 문서 도구 의존성은 미포함 |
-| 파일 무결성 확인 | [SHA256SUMS.txt](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.10.13/SHA256SUMS.txt) | `Get-FileHash -Algorithm SHA256 <파일>` 결과와 대조 |
-| 빌드·버전 확인 | [release-manifest.json](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.10.13/release-manifest.json) | 소스 커밋·빌드 구성·EXE 해시 기록 |
+| 변환 + 문서 읽기·비교·수정 **(권장)** | [Windows 전체 ZIP](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.11.06/hwpx-converter-v2026.11.06-windows-x64.zip) | 전체 압축 해제. 문서 도구에는 Node.js 20 이상 필요 |
+| 기존 파일 변환 | [EXE 단일 파일](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.11.06/anyway_to_hwpx_gui.exe) | 변환에는 한컴오피스 한글 필요. 문서 도구 의존성은 미포함 |
+| 파일 무결성 확인 | [SHA256SUMS.txt](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.11.06/SHA256SUMS.txt) | `Get-FileHash -Algorithm SHA256 <파일>` 결과와 대조 |
+| 빌드·버전 확인 | [release-manifest.json](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/download/v2026.11.06/release-manifest.json) | 소스 커밋·빌드 구성·EXE 해시 기록 |
 
-배포본은 `2026.10.13`, PDF `full` 스택입니다. ZIP에는 `kordoc 4.21.30`과 `pdfjs-dist 4.10.38`이 포함되며 별도 npm 설치가 필요하지 않습니다. Node.js 자체는 포함하지 않습니다.
+배포본은 `2026.11.06`, PDF `full` 스택입니다. ZIP에는 `kordoc 4.21.30`과 `pdfjs-dist 4.10.38`이 포함되며 별도 npm 설치가 필요하지 않습니다. Node.js 자체는 포함하지 않습니다.
 
 ## 빠른 시작
 
@@ -144,7 +146,7 @@ $env:KORDOC_HOME = "C:\tools\kordoc-ai"
 
 ## 릴리스 검증
 
-`v2026.10.13`은 **399개 검사 통과·제외 0개**로 검증했습니다. 실제 한컴 PDF 왕복 검사, 대표 문서의 재열기·PDF 비교, 수정·양식 사본 확인, 저장소 밖 ZIP 실행·문서 읽기·정상 종료, 공개 다운로드 해시 대조를 포함합니다.
+`v2026.11.06`은 **소스 검사 405개 전부 통과**(실제 한컴 PDF 왕복 검사는 `HWPX_RUN_COM_TESTS=1`로 별도 실행)로 검증했습니다. 수정마다 2026.10.13 코드에서 실패하는 회귀 테스트를 추가했습니다. `v2026.10.13`은 **399개 검사 통과·제외 0개**로 검증했습니다. 실제 한컴 PDF 왕복 검사, 대표 문서의 재열기·PDF 비교, 수정·양식 사본 확인, 저장소 밖 ZIP 실행·문서 읽기·정상 종료, 공개 다운로드 해시 대조를 포함합니다.
 
 이는 검증 PC와 샘플에 대한 결과입니다. 최초 실행 지연과 지원 범위는 [릴리스 기록](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.10.13)에 명시했습니다. 이전 개발판의 상세 증거는 [구현·설치 검증 기록](docs/kordoc-implementation-verification.md)에 있습니다.
 

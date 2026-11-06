@@ -5,6 +5,7 @@ import base64
 import hashlib
 import html
 import json
+import os
 from pathlib import Path
 import queue
 import secrets
@@ -28,7 +29,9 @@ STATUS_LABELS = {"success": "완료", "partial": "일부 완료 · 확인 필요
 
 def input_fingerprints(paths):
     """Bind an edit preview to the exact source/value files the user reviewed."""
-    return {str(Path(p).resolve()): hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths}
+    # Key by the lexical absolute path that is also sent to the bridge. resolve()
+    # can turn a mapped/SUBST drive into a UNC path that Node never produces.
+    return {os.path.abspath(p): hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in paths}
 
 
 def safe_preview_html(svg: str, title: str = "문서 미리보기") -> str:
@@ -206,7 +209,8 @@ class DocumentWorkbench(tk.Toplevel):
         self.save_report_button = self._button(footer, "보고서 저장(JSON)", self.save_report)
         self.save_markdown_button = self._button(footer, "본문 저장(MD)", self.save_markdown)
         self.apply_button = self._button(footer, "검토한 수정본 저장", self.apply_edit)
-        self.cancel_button = ttk.Button(footer, text="작업 취소", command=self.cancel_event.set, state="disabled")
+        # _start() replaces cancel_event per job; resolve it when clicked.
+        self.cancel_button = ttk.Button(footer, text="작업 취소", command=lambda: self.cancel_event.set(), state="disabled")
         self.cancel_button.pack(side=tk.RIGHT)
         self._set_busy(False)
 

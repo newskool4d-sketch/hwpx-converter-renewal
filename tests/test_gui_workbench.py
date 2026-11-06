@@ -105,6 +105,34 @@ class MainWindowRecoveryTests(unittest.TestCase):
         app.retry_failed()
         self.assertEqual(launched, [(("failed.md",), "output", False, True, "editable", True, "sihaengmun")])
 
+    def test_retry_uses_the_limit_entered_after_a_timeout(self):
+        import anyway_to_hwpx_gui as gui
+
+        class Entry:
+            def __init__(self, value):
+                self.value = value
+
+            def get(self):
+                return self.value
+
+        app = gui.ConverterApp.__new__(gui.ConverterApp)
+        app._is_busy = lambda: False
+        app.failed_files = ["slow.pdf"]
+        app._last_snapshot_args = (("slow.pdf",), "output", False, True, "layout", False, "plan")
+        app._timeout_snapshot = 180
+        launched = []
+        app._launch_conversion = launched.append
+        app.file_timeout_seconds = Entry("600")
+        app.retry_failed()
+        self.assertEqual(app._timeout_snapshot, 600)
+        self.assertEqual(len(launched), 1)
+        app.file_timeout_seconds = Entry("5")
+        with patch("anyway_to_hwpx_gui.messagebox.showwarning") as warning:
+            app.retry_failed()
+        warning.assert_called_once()
+        self.assertEqual(len(launched), 1)
+        self.assertEqual(app._timeout_snapshot, 600)
+
 
 class _Client:
     def __init__(self):
@@ -187,6 +215,15 @@ class WorkbenchInteractionTests(unittest.TestCase):
         self.complete()
         self.assertIn("취소됨", self.app.status.get())
         self.assertEqual(str(self.app.cancel_button["state"]), "disabled")
+
+    def test_cancel_button_cancels_the_job_started_after_window_creation(self):
+        self.client.wait_for_cancel = True
+        self.app.run_action("validate")
+        started = self.app.cancel_event
+        self.app.cancel_button.invoke()
+        self.assertTrue(started.is_set())
+        self.complete()
+        self.assertIn("취소됨", self.app.status.get())
 
     def test_edit_requires_unchanged_preview_and_never_overwrites_original(self):
         with patch("document_workbench.filedialog.askopenfilename", return_value=str(self.markdown)):

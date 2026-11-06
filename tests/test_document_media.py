@@ -103,6 +103,20 @@ class DocumentMediaTests(unittest.TestCase):
         run.add_text('끝')
         self.assertEqual(list(converter._docx_paragraph_segments(paragraph)), [run.text])
 
+    def test_docx_text_box_paragraphs_stay_separate_from_anchor_text(self):
+        from docx.oxml import parse_xml
+
+        document = Document()
+        paragraph = document.add_paragraph('개요')
+        paragraph._p.append(parse_xml(
+            '<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+            'xmlns:v="urn:schemas-microsoft-com:vml"><w:pict><v:shape><v:textbox><w:txbxContent>'
+            '<w:p><w:r><w:t>목표</w:t></w:r></w:p><w:p><w:r><w:t>추진 일정</w:t></w:r></w:p>'
+            '</w:txbxContent></v:textbox></v:shape></w:pict></w:r>'
+        ))
+        self.assertEqual(list(converter._docx_paragraph_segments(paragraph)), ['개요', '목표', '추진 일정'])
+        self.assertTrue(any('글상자' in note for note in converter.pop_conversion_notes()))
+
     def test_docx_image_without_asset_folder_is_in_memory_not_lost(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
