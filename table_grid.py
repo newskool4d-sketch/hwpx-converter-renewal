@@ -47,7 +47,29 @@ def expand_spanned_rows(rows: list[list[SourceCell]]) -> tuple[list[list[str]], 
                     covered.add((target_row, target_col))
             col_index += col_span
     max_cols = max((len(row) for row in grid), default=0)
-    return [row + [""] * (max_cols - len(row)) for row in grid], merged_cells
+    padded = [row + [""] * (max_cols - len(row)) for row in grid]
+    return _drop_fully_covered_rows(padded, merged_cells, covered)
+
+
+def _drop_fully_covered_rows(
+    grid: list[list[str]], merged_cells: list[list[int]], covered: set[tuple[int, int]]
+) -> tuple[list[list[str]], list[list[int]]]:
+    """모든 칸이 병합에 가려진 행은 셀이 하나도 없는 행이 되어 한글이 문서를 열지 못한다.
+
+    그런 행을 빼고 병합 좌표·크기를 남은 행 기준으로 다시 매긴다.
+    """
+    kept = [
+        row_index for row_index, row in enumerate(grid)
+        if not row or any((row_index, col_index) not in covered for col_index in range(len(row)))
+    ]
+    if len(kept) == len(grid):
+        return grid, merged_cells
+    remapped: list[list[int]] = []
+    for row, col, row_span, col_span in merged_cells:
+        rows = [index for index, kept_row in enumerate(kept) if row <= kept_row < row + row_span]
+        if rows and (len(rows) > 1 or col_span > 1):
+            remapped.append([rows[0], col, len(rows), col_span])
+    return [grid[row_index] for row_index in kept], remapped
 
 
 def block_rows_from_grid(grid: list[list[str]]) -> tuple[list[str], list[list[str]]]:

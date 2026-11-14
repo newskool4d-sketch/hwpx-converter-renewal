@@ -131,6 +131,9 @@ def _kordoc_commands(kordoc_dir, path):
 
 _MD_IMAGE_PATTERN = re.compile(r'!\[[^\]]*\]\([^\)]+\)')
 _MD_LINK_PATTERN = re.compile(r'\[([^\]]+)\]\([^\)]+\)')
+# 실제 HTML 태그·주석만 제거 — '<붙임 1>', '점수 < 60 … > 90' 같은 본문 꺾쇠는 보존
+_HTML_BREAK_PATTERN = re.compile(r'<br\s*/?>', re.IGNORECASE)
+_HTML_TAG_PATTERN = re.compile(r'<!--.*?-->|</?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?/?>')
 
 
 def _clean_inline(text):
@@ -138,12 +141,20 @@ def _clean_inline(text):
     text = _MD_LINK_PATTERN.sub(r'\1', text)
     text = re.sub(r'`([^`]+)`', r'\1', text)
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-    text = re.sub(r'__([^_]+)__', r'\1', text)
-    text = re.sub(r'\*([^*]+)\*', r'\1', text)
-    text = re.sub(r'_([^_]+)_', r'\1', text)
+    # 밑줄 강조는 단어 경계에서만(CommonMark) — 'plan_2026_final' 같은 식별자 보존
+    text = re.sub(r'(?<!\w)__([^_]+)__(?!\w)', r'\1', text)
+    # 숫자 사이 별표는 곱셈 표기('3*4*5')로 보고 보존
+    text = re.sub(r'(?<!\d)\*([^*]+)\*(?!\d)', r'\1', text)
+    text = re.sub(r'(?<!\w)_([^_]+)_(?!\w)', r'\1', text)
     text = text.replace('&nbsp;', ' ')
-    text = re.sub(r'<[^>]+>', '', text)
+    text = _HTML_BREAK_PATTERN.sub(' ', text)
+    text = _HTML_TAG_PATTERN.sub('', text)
     return text.strip()
+
+
+def _plain_inline(text):
+    """Markdown이 아닌 원본(TXT·HTML·CSV·XLSX·PDF 셀)의 글자는 해석하지 않고 보존한다."""
+    return text.replace('\xa0', ' ').strip()
 
 
 def _is_separator(line):
@@ -186,8 +197,8 @@ def _split_markdown_table_cells(line):
     return cells
 
 
-def _parse_table_row(line):
-    return [_clean_inline(c.strip()) for c in _split_markdown_table_cells(line)]
+def _parse_table_row(line, clean=_clean_inline):
+    return [clean(c.strip()) for c in _split_markdown_table_cells(line)]
 
 
 def _normalize_parsed_table(header, rows):
@@ -204,8 +215,8 @@ _ALLOW_ROMAN_LEVEL = contextvars.ContextVar('allow_roman_level', default=True)
 _DOC_TYPES = ('plan', 'sihaengmun')
 
 
-def _detect_list_item(line):
-    return detect_official_list_item(line, _clean_inline, allow_roman=_ALLOW_ROMAN_LEVEL.get())
+def _detect_list_item(line, clean=_clean_inline):
+    return detect_official_list_item(line, clean, allow_roman=_ALLOW_ROMAN_LEVEL.get())
 
 
 _ATTACHMENT_HEAD_PATTERN = re.compile(r'^붙임\s*[::]?\s+(\S.*)$')
@@ -257,7 +268,8 @@ def parse_markdown(text, source_dir=None):
             continue
 
         if line.strip() == '---':
-            if i == 0:
+            # 닫는 '---'가 있을 때만 front matter — 없으면 첫 줄 구분선이 문서 전체를 삼킨다.
+            if i == 0 and any(later.strip() == '---' for later in lines[1:]):
                 in_front = True
                 i += 1
                 continue
@@ -509,11 +521,11 @@ def parse_plain_text(text):
         if pipe_run:
             table_lines = [lines[i + k] for k in range(pipe_run)]
             if len(table_lines) >= 2 and _is_separator(table_lines[1]):
-                header = _parse_table_row(table_lines[0])
-                body_rows = [_parse_table_row(ln) for ln in table_lines[2:]]
+                header = _parse_table_row(table_lines[0], _plain_inline)
+                body_rows = [_parse_table_row(ln, _plain_inline) for ln in table_lines[2:]]
             else:
-                header = _parse_table_row(table_lines[0])
-                body_rows = [_parse_table_row(ln) for ln in table_lines[1:]]
+                header = _parse_table_row(table_lines[0], _plain_inline)
+                body_rows = [_parse_table_row(ln, _plain_inline) for ln in table_lines[1:]]
             header, body_rows = _normalize_parsed_table(header, body_rows)
             blocks.append({'type': 'table', 'header': header, 'rows': body_rows, 'table_source': 'text'})
             i += pipe_run
@@ -533,7 +545,7 @@ def parse_plain_text(text):
                 continue
             in_attachment = False
 
-        li_result = _detect_list_item(line)
+        li_result = _detect_list_item(line, _plain_inline)
         if li_result:
             depth = li_result['depth']
             if li_result['marker'] == '•':
@@ -548,7 +560,7 @@ def parse_plain_text(text):
                 'content': li_result['content'],
             })
         else:
-            blocks.append({'type': 'p', 'text': _clean_inline(line)})
+            blocks.append({'type': 'p', 'text': _plain_inline(line)})
         i += 1
     return blocks
 
@@ -562,26 +574,34 @@ def parse_html(text):
     soup = BeautifulSoup(text, 'html.parser')
     blocks = []
     body = soup.body or soup
-    for node in body.find_all(['h1', 'h2', 'h3', 'p', 'blockquote', 'pre', 'table', 'li'], recursive=True):
+    block_tags = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'blockquote', 'pre', 'table', 'li']
+    leaf_tags = ('div', 'dt', 'dd')  # 하위에 블록 요소가 없을 때만 문단으로 본다
+    for node in body.find_all(block_tags + list(leaf_tags), recursive=True):
         if node.find_parent(['table']) and node.name != 'table':
             continue
         if node.find_parent(['blockquote', 'pre']) and node.name not in ('blockquote', 'pre'):
             continue
         if node.find_parent('li') and node.name != 'li':
             continue
-        if node.name in ('h1', 'h2', 'h3'):
-            level = int(node.name[1])
+        if node.name in leaf_tags:
+            if node.find(block_tags + list(leaf_tags) + ['ul', 'ol']) is None:
+                value = node.get_text(' ', strip=True)
+                if value:
+                    blocks.append({'type': 'p', 'text': _plain_inline(value)})
+            continue
+        if node.name in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            level = min(int(node.name[1]), 3)
             value = node.get_text(' ', strip=True)
             if value:
-                blocks.append({'type': 'h', 'level': level, 'text': _clean_inline(value)})
+                blocks.append({'type': 'h', 'level': level, 'text': _plain_inline(value)})
         elif node.name == 'p':
             value = node.get_text(' ', strip=True)
             if value:
-                blocks.append({'type': 'p', 'text': _clean_inline(value)})
+                blocks.append({'type': 'p', 'text': _plain_inline(value)})
         elif node.name == 'blockquote':
             value = node.get_text(' ', strip=True)
             if value:
-                blocks.append({'type': 'bq', 'text': _clean_inline(value)})
+                blocks.append({'type': 'bq', 'text': _plain_inline(value)})
         elif node.name == 'pre':
             value = node.get_text('\n', strip=True)
             for line in value.splitlines():
@@ -601,9 +621,10 @@ def parse_html(text):
             value = ' '.join(parts)
             if value:
                 depth = len(node.find_parents(['ul', 'ol'])) - 1
-                blocks.append({'type': 'li', 'text': _clean_inline(value), 'depth': max(depth, 0)})
+                blocks.append({'type': 'li', 'text': _plain_inline(value), 'depth': max(depth, 0)})
         elif node.name == 'table':
             source_rows = []
+            open_spans = 0  # 위 행의 rowspan이 아직 덮고 있는 행 수
             for tr in node.find_all('tr'):
                 cells = [
                     SourceCell(
@@ -613,8 +634,10 @@ def parse_html(text):
                     )
                     for cell in tr.find_all(['th', 'td'])
                 ]
-                if cells:
+                # 빈 <tr>도 rowspan이 덮는 자리면 남겨야 다음 행이 옆으로 밀리지 않는다.
+                if cells or open_spans > 0:
                     source_rows.append(cells)
+                open_spans = max([open_spans - 1] + [cell.row_span - 1 for cell in cells])
             grid, merged_cells = expand_spanned_rows(source_rows)
             header, rows = block_rows_from_grid(grid)
             if header:
@@ -635,7 +658,7 @@ def parse_csv_file(path):
     except csv.Error:
         dialect = csv.excel
     rows = list(csv.reader(text.splitlines(), dialect))
-    rows = [[_clean_inline(cell.strip()) for cell in row] for row in rows if any(cell.strip() for cell in row)]
+    rows = [[_plain_inline(cell) for cell in row] for row in rows if any(cell.strip() for cell in row)]
     if not rows:
         return []
     return [{'type': 'table', 'header': rows[0], 'rows': rows[1:], 'table_source': 'csv'}]
@@ -670,13 +693,19 @@ def _xlsx_table_block(ws):
                 continue
             row_span, col_span = top_left_spans.get((row_index, col_index), (1, 1))
             value = ws.cell(row=row_index, column=col_index).value
-            source_row.append(SourceCell('' if value is None else _clean_inline(str(value)), row_span, col_span))
-        if source_row:
-            source_rows.append(source_row)
+            source_row.append(SourceCell('' if value is None else _plain_inline(str(value)), row_span, col_span))
+        # 병합에 전부 가려진 행도 자리를 지켜야 이후 행·병합 좌표가 밀리지 않는다.
+        source_rows.append(source_row)
     grid, merged_cells = expand_spanned_rows(source_rows)
-    header, rows = block_rows_from_grid(_trim_grid(grid))
+    grid = _trim_grid(grid)
+    header, rows = block_rows_from_grid(grid)
     if not header:
         return None
+    col_count = len(header)
+    merged_cells = [
+        span for span in merged_cells
+        if span[0] + span[2] <= len(grid) and span[1] + span[3] <= col_count
+    ]
     block = {
         'type': 'table',
         'header': header,
@@ -1246,7 +1275,7 @@ def _pdfplumber_clean_cell(value):
     if value is None:
         return ''
     text = re.sub(r'\s+', ' ', str(value).replace('\n', ' '))
-    return _clean_inline(text)
+    return _plain_inline(text)
 
 
 def _pdfplumber_table_to_block(table_rows):
@@ -1579,6 +1608,7 @@ def _docx_table_grid(table):
     from docx.oxml.ns import qn
     text_tag = qn('w:t')
     grid = []
+    kept_rows = []
     merged_cells = []
     active_vertical = {}
     for row_index, table_row in enumerate(table._tbl.tr_lst):
@@ -1610,10 +1640,17 @@ def _docx_table_grid(table):
                 row_values[covered_col] = ''
             col_index += col_span
         if any(row_values):
+            kept_rows.append(row_index)
             grid.append(row_values)
     max_cols = max((len(row) for row in grid), default=0)
     normalized = [row + [''] * (max_cols - len(row)) for row in grid]
-    return normalized, [span for span in merged_cells if span[2] > 1 or span[3] > 1]
+    # 빈 행을 뺐으므로 병합 좌표도 남은 행 기준으로 다시 매긴다(안 그러면 후처리가 엉뚱한 셀을 지움).
+    remapped = []
+    for row, col, row_span, col_span in merged_cells:
+        covered_rows = [index for index, kept in enumerate(kept_rows) if row <= kept < row + row_span]
+        if covered_rows and (len(covered_rows) > 1 or col_span > 1):
+            remapped.append([covered_rows[0], col, len(covered_rows), col_span])
+    return normalized, remapped
 
 
 def _iter_docx_content_nodes(element):
@@ -1775,7 +1812,11 @@ def detect_and_parse(file_path, kordoc_home=None, pdf_mode='layout', asset_dir=N
             return parse_kordoc_document(file_path, package_dir=kordoc_package)
         if input_engine != 'native':
             raise ValueError(f'지원하지 않는 입력 엔진: {input_engine}')
-        return _parse_by_extension(file_path, kordoc_home=kordoc_home, pdf_mode=pdf_mode, asset_dir=asset_dir)
+        parsed = _parse_by_extension(file_path, kordoc_home=kordoc_home, pdf_mode=pdf_mode, asset_dir=asset_dir)
+        if isinstance(parsed, list) and not parsed:
+            # 빈 문서를 '완료'로 저장하면 내용 누락을 알 수 없다.
+            raise RuntimeError('변환할 본문·표를 찾지 못했습니다. 원본 내용과 형식을 확인하세요.')
+        return parsed
     finally:
         _ALLOW_ROMAN_LEVEL.reset(token)
 
@@ -2890,8 +2931,11 @@ def append_end_mark_blocks(blocks):
 
 
 # 끝 온점 앞 공백은 온점이 있을 때만 소비 — '2026.3.22 행사'의 뒤 공백 보존(N17)
+# 파일명·문서번호·규격('계획서_2026.03.22.hwpx', '2026.12.31.001', '1200.5.3mm')은 날짜가 아니다:
+# 앞이 영숫자·밑줄·온점이거나 뒤가 영숫자(온점 뒤 포함)이면 건드리지 않는다.
 _OFFICIAL_DATE_PATTERN = re.compile(
-    r'(?<![\d.])(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})(?:\s*\.)?(?!\d)'
+    r'(?<![A-Za-z0-9_.])(\d{4})\s*\.\s*(\d{1,2})\s*\.\s*(\d{1,2})'
+    r'(?:\s*\.(?![A-Za-z0-9]))?(?![A-Za-z0-9])(?!\.[A-Za-z0-9])'
 )
 
 
@@ -2904,13 +2948,18 @@ def _format_official_date(match):
 
 def normalize_official_dates(blocks):
     """날짜 표기 규칙 (행정업무운영규정 영 제7조) — '2026.3.22' → '2026. 3. 22.'"""
+    return _normalize_official_text(blocks, _OFFICIAL_DATE_PATTERN, _format_official_date)
+
+
+def _normalize_official_text(blocks, pattern, formatter):
+    """본문 블록의 text·value에 표기 정규화를 적용 (official_header는 value만 있을 수 있음)."""
     result = []
     for blk in blocks:
-        if blk.get('type') in ('p', 'li', 'bq', 'attachment', 'official_header', 'h') and blk.get('text'):
+        if blk.get('type') in ('p', 'li', 'bq', 'attachment', 'official_header', 'h'):
             updated = dict(blk)
-            updated['text'] = _OFFICIAL_DATE_PATTERN.sub(_format_official_date, updated['text'])
-            if 'value' in updated and updated.get('value'):
-                updated['value'] = _OFFICIAL_DATE_PATTERN.sub(_format_official_date, updated['value'])
+            for key in ('text', 'value'):
+                if isinstance(updated.get(key), str) and updated[key]:
+                    updated[key] = pattern.sub(formatter, updated[key])
             result.append(updated)
         else:
             result.append(blk)
@@ -2950,13 +2999,20 @@ def _sino_korean_amount(value):
     return sign + ''.join(parts)
 
 
+# 앞이 숫자·온점·쉼표이면 소수('1,385.5원')나 잘못 끊긴 수의 일부이므로 금액으로 보지 않는다.
 _OFFICIAL_AMOUNT_PATTERN = re.compile(
-    r'금?(\d{1,3}(?:,\d{3})+|\d+)\s*원(?!\s*\()'
+    r'(?<![\d.,])금?(\d{1,3}(?:,\d{3})+|\d+)\s*원(?!\s*\()'
+)
+# 쉼표 없는 수 뒤의 '원'이 다른 낱말의 첫 글자인 경우('3원칙', '2026 원년', '3 원격수업')
+_NON_AMOUNT_WON_WORD = re.compile(
+    r'(?:칙|년|격|안|본|고|래|장|생|아|활|점|문|서|료|형|리|소|자|어|작|인|가(?!량))'
 )
 
 
 def _format_official_amount(match):
     raw = match.group(1)
+    if ',' not in raw and _NON_AMOUNT_WON_WORD.match(match.string, match.end()):
+        return match.group(0)
     digits = int(raw.replace(',', ''))
     return f'금{raw}원(금{_sino_korean_amount(digits)}원)'
 
@@ -2966,17 +3022,7 @@ def normalize_official_amounts(blocks):
 
     이미 한글 병기된 금액(뒤에 '(...'가 오는 경우)은 건드리지 않는다.
     """
-    result = []
-    for blk in blocks:
-        if blk.get('type') in ('p', 'li', 'bq', 'attachment', 'official_header', 'h') and blk.get('text'):
-            updated = dict(blk)
-            updated['text'] = _OFFICIAL_AMOUNT_PATTERN.sub(_format_official_amount, updated['text'])
-            if 'value' in updated and updated.get('value'):
-                updated['value'] = _OFFICIAL_AMOUNT_PATTERN.sub(_format_official_amount, updated['value'])
-            result.append(updated)
-        else:
-            result.append(blk)
-    return result
+    return _normalize_official_text(blocks, _OFFICIAL_AMOUNT_PATTERN, _format_official_amount)
 
 
 # ─── 공공언어 스타일 린트 (정본 §1-1, 경고 수준·비강제) ──────────────────────────
@@ -3120,6 +3166,10 @@ def self_check_hwpx(hwpx_path):
                 not tbl.get('rowCnt') or not tbl.get('colCnt') for tbl in root.iter(f'{{{_NS_HP}}}tbl')
             ):
                 problems.append(f'{entry.filename} 표 rowCnt/colCnt 누락')
+            if is_section and any(
+                tr.find(f'{{{_NS_HP}}}tc') is None for tr in root.iter(f'{{{_NS_HP}}}tr')
+            ):
+                problems.append(f'{entry.filename} 셀이 없는 표 행 — 한글에서 열리지 않을 수 있음')
     return [f'[확인 필요] 산출물 자가검증: {problem}' for problem in problems]
 
 
