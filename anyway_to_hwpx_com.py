@@ -45,7 +45,7 @@ from hwpx_layout import (
     normalize_table_rows,
     official_list_para_shape,
 )
-from table_grid import SourceCell, block_rows_from_grid, expand_spanned_rows
+from table_grid import MAX_TABLE_CELLS, SourceCell, block_rows_from_grid, expand_spanned_rows
 from table_hwpx_postprocess import apply_table_layout_profiles as _apply_table_layout_profiles_new
 from table_hwpx_styles import HWPML_ROOT_NAMESPACES, serialize_hwpml_part
 from table_model import table_layout_for
@@ -111,7 +111,6 @@ def resolve_kordoc_dir(explicit_path=None):
         value = os.environ.get(env_name)
         if value:
             candidates.append(Path(value))
-    candidates.append(Path(r'C:/Users/홍주형/kordoc-ai'))
 
     for candidate in candidates:
         expanded = candidate.expanduser()
@@ -436,15 +435,24 @@ def _markdown_image_block(target, source_dir):
     else:
         target = re.sub(r'\s+[\"\'].*[\"\']\s*$', '', target)
     target = unquote(target)
-    # UNC paths and URL schemes may initiate remote access even without HTTP.
-    if target.startswith(('//', '\\\\')) or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]+:', target) and not re.match(r'^[a-zA-Z]:[\\/]', target):
+    # 외부에서 받은 문서가 PC의 다른 이미지를 끌어오거나 네트워크 경로에 접속하지 못하게,
+    # 문서 폴더 안의 상대 경로만 허용한다. 파일 시스템 접근(resolve) 전에 글자 수준에서 먼저 거른다.
+    parts = re.split(r'[\\/]+', target)
+    if (
+        not target
+        or target[0] in '\\/~'
+        or re.match(r'^[a-zA-Z][a-zA-Z0-9+.-]*:', target)
+        or '..' in parts
+    ):
+        _add_conversion_note('[확인 필요] 문서 폴더 밖 경로의 이미지는 넣지 않았습니다. 이미지를 문서와 같은 폴더(하위 폴더 포함)에 두세요.')
         return None
     try:
-        path = Path(target).expanduser()
-        if not path.is_absolute():
-            path = Path(source_dir) / path
-        path = path.resolve()
-        if str(path).startswith(('//', '\\\\')) or not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
+        root = Path(source_dir).resolve()
+        path = (root / target).resolve()
+        if not path.is_relative_to(root):  # 폴더 안 링크가 밖을 가리키는 경우
+            _add_conversion_note('[확인 필요] 문서 폴더 밖 경로의 이미지는 넣지 않았습니다. 이미지를 문서와 같은 폴더(하위 폴더 포함)에 두세요.')
+            return None
+        if not path.is_file() or path.stat().st_size > 32 * 1024 * 1024:
             return None
         width, height, _ = _image_size_mm(path.read_bytes())
     except (OSError, ValueError, ImportError, KeyError):
@@ -565,6 +573,12 @@ def parse_plain_text(text):
     return blocks
 
 
+def _html_span(value):
+    """rowspan/colspan 속성값 — 브라우저처럼 앞쪽 숫자만 읽고, 못 읽으면 1."""
+    match = re.match(r'\s*(\d{1,6})', str(value or ''))
+    return max(1, int(match.group(1))) if match else 1
+
+
 def parse_html(text):
     try:
         from bs4 import BeautifulSoup
@@ -629,8 +643,8 @@ def parse_html(text):
                 cells = [
                     SourceCell(
                         text=cell.get_text(' ', strip=True),
-                        row_span=max(1, int(cell.get('rowspan', 1) or 1)),
-                        col_span=max(1, int(cell.get('colspan', 1) or 1)),
+                        row_span=_html_span(cell.get('rowspan')),
+                        col_span=_html_span(cell.get('colspan')),
                     )
                     for cell in tr.find_all(['th', 'td'])
                 ]
@@ -674,21 +688,35 @@ def _trim_grid(grid):
 
 
 def _xlsx_table_block(ws):
+    # 서식만 지정된 먼 셀이 max_row/max_column을 부풀린다 — 값이 있는 범위만 읽는다.
+    valued = [(cell.row, cell.column) for cell in getattr(ws, '_cells', {}).values() if cell.value is not None]
+    if not valued:
+        return None
+    max_row = max(row for row, _ in valued)
+    max_col = max(col for _, col in valued)
+    if max_row * max_col > MAX_TABLE_CELLS:
+        raise ValueError(
+            f'시트 "{ws.title}"의 사용 범위({max_row:,}행×{max_col:,}열)가 처리 한도({MAX_TABLE_CELLS:,}칸)를 초과했습니다.'
+        )
     top_left_spans = {}
     covered = set()
     for merged_range in ws.merged_cells.ranges:
-        row_span = merged_range.max_row - merged_range.min_row + 1
-        col_span = merged_range.max_col - merged_range.min_col + 1
+        if merged_range.min_row > max_row or merged_range.min_col > max_col:
+            continue
+        last_row = min(merged_range.max_row, max_row)
+        last_col = min(merged_range.max_col, max_col)
+        row_span = last_row - merged_range.min_row + 1
+        col_span = last_col - merged_range.min_col + 1
         top_left_spans[(merged_range.min_row, merged_range.min_col)] = (row_span, col_span)
-        for row_index in range(merged_range.min_row, merged_range.max_row + 1):
-            for col_index in range(merged_range.min_col, merged_range.max_col + 1):
+        for row_index in range(merged_range.min_row, last_row + 1):
+            for col_index in range(merged_range.min_col, last_col + 1):
                 if row_index == merged_range.min_row and col_index == merged_range.min_col:
                     continue
                 covered.add((row_index, col_index))
     source_rows = []
-    for row_index in range(1, ws.max_row + 1):
+    for row_index in range(1, max_row + 1):
         source_row = []
-        for col_index in range(1, ws.max_column + 1):
+        for col_index in range(1, max_col + 1):
             if (row_index, col_index) in covered:
                 continue
             row_span, col_span = top_left_spans.get((row_index, col_index), (1, 1))
@@ -3233,6 +3261,9 @@ def write_output_manifest(output_dir, output_files):
     )
 
 
+_APP_TEMP_DIR_PREFIXES = ('anyway-to-hwpx-pdf-', 'anyway-to-hwpx-docx-', '.conversion-')
+
+
 def prepare_output_dir(output_dir, empty_output_folder=False, protected_paths=()):
     out_dir = as_path(output_dir)
     if empty_output_folder:
@@ -3255,6 +3286,9 @@ def prepare_output_dir(output_dir, empty_output_folder=False, protected_paths=()
     unknown_files = []
     for child in children:
         rel_name = child.relative_to(out_dir).as_posix()
+        # 중단된 변환이 남긴 이 앱의 임시 폴더는 관리 대상으로 보고 함께 비운다.
+        if child.is_dir() and child.name.startswith(_APP_TEMP_DIR_PREFIXES):
+            continue
         if rel_name not in managed_files:
             unknown_files.append(rel_name)
     if unknown_files:

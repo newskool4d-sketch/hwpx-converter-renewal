@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import threading
@@ -33,6 +32,24 @@ def _package_at(path: Path) -> Path | None:
     for candidate in (path, path / "node_modules" / "kordoc"):
         if (candidate / "package.json").is_file() and (candidate / "dist" / "index.js").is_file():
             return candidate.resolve()
+    return None
+
+
+def _node_on_path() -> str | None:
+    """Find Node on PATH only.
+
+    shutil.which() on Windows also looks in the current folder first, so running
+    from a folder of received documents could start a planted node.exe.
+    """
+    names = ("node.exe",) if os.name == "nt" else ("node",)
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        entry = entry.strip().strip('"')
+        if not entry or not os.path.isabs(entry):  # '', '.', and relative entries mean the current folder
+            continue
+        for name in names:
+            candidate = Path(entry) / name
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
@@ -65,7 +82,7 @@ class KordocClient:
             path = Path(explicit).expanduser()
             return str(path.resolve()) if path.is_file() else None
         adjacent = Path(sys.executable).resolve().parent / "deps" / "node" / "node.exe"
-        return str(adjacent) if adjacent.is_file() else shutil.which("node")
+        return str(adjacent) if adjacent.is_file() else _node_on_path()
 
     def request(self, action: str, *, cancel_event=None, **kwargs: Any) -> dict:
         """Return {ok,status,action,data,warnings,error}; never raise for job errors."""

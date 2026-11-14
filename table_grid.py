@@ -10,6 +10,10 @@ class SourceCell:
     col_span: int = 1
 
 
+MAX_TABLE_CELLS = 100_000
+MAX_COL_SPAN = 1000  # HTML 표준의 colspan 상한
+
+
 def _span(value: int) -> int:
     return max(1, value)
 
@@ -32,8 +36,11 @@ def expand_spanned_rows(rows: list[list[SourceCell]]) -> tuple[list[list[str]], 
             while (row_index, col_index) in covered:
                 _ensure_grid_cell(grid, row_index, col_index)
                 col_index += 1
-            row_span = _span(source_cell.row_span)
-            col_span = _span(source_cell.col_span)
+            # 병합은 표의 남은 행을 넘을 수 없다 — 과장된 rowspan이 유령 행·메모리 고갈을 만들지 않게 함.
+            row_span = min(_span(source_cell.row_span), len(rows) - row_index)
+            col_span = min(_span(source_cell.col_span), MAX_COL_SPAN)
+            if len(rows) * (col_index + col_span) > MAX_TABLE_CELLS:
+                raise ValueError(f'표가 처리 한도({MAX_TABLE_CELLS:,}칸)를 초과했습니다.')
             _ensure_grid_cell(grid, row_index, col_index)
             grid[row_index][col_index] = source_cell.text
             if row_span > 1 or col_span > 1:
