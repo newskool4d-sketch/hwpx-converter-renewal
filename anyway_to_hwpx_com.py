@@ -3261,7 +3261,7 @@ def write_output_manifest(output_dir, output_files):
     )
 
 
-_APP_TEMP_DIR_PREFIXES = ('anyway-to-hwpx-pdf-', 'anyway-to-hwpx-docx-', '.conversion-')
+_APP_TEMP_DIR_PREFIXES = ('anyway-to-hwpx-pdf-', 'anyway-to-hwpx-docx-', '.conversion-', '.to-md-')
 
 
 def prepare_output_dir(output_dir, empty_output_folder=False, protected_paths=()):

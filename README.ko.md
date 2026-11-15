@@ -2,7 +2,7 @@
 
 [English](README.md) | **한국어**
 
-Markdown, TXT, DOCX, HTML, CSV, XLSX, PDF를 **한컴 서식의 HWPX로 변환**하는 Windows 앱입니다. 선택형 로컬 문서 도구로 기존 HWP/HWPX를 읽고, 비교하고, HWPX 수정본과 작성한 양식 사본을 만들 수 있습니다.
+Markdown, TXT, DOCX, HTML, CSV, XLSX, PDF를 **한컴 서식의 HWPX로 변환**하는 Windows 앱입니다. 선택형 로컬 문서 도구로 기존 HWP/HWPX를 읽고, 비교하고, HWPX 수정본과 작성한 양식 사본을 만들 수 있습니다. 반대 방향으로 **HWP·HWPX·PDF를 Markdown으로** 여러 개 한꺼번에 바꾸는 기능(기본 화면의 `한글·PDF → Markdown`, 명령줄 `document_cli.py to-md`)도 있으며 한글 프로그램 없이 동작합니다. 스캔 PDF(OCR 없음)·문서보안(DRM)·암호 문서는 사유와 함께 변환하지 않습니다.
 
 [최신 릴리스](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/latest) · [문서 도구 상세 안내](docs/document-tools.md) · [2026.11.06 변경 내용](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.11.06) · [2026.10.13 변경 내용](https://github.com/newskool4d-sketch/hwpx-converter-renewal/releases/tag/v2026.10.13)
 

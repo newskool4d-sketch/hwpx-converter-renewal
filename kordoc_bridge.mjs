@@ -28,6 +28,27 @@ console.log = console.info = console.warn = console.error = () => {};
 const OPTIONS = Object.freeze({ ocr: false, formulaOcr: false, layoutTables: 'keep',
   keepTrailingEmptyCols: true, keepEmptyParagraphs: true, removeHeaderFooter: false,
   dedupeRunningHeaders: false, inlineImages: false });
+// Markdown export is for reading, not round-trip patching: kordoc's reading defaults,
+// PDF running headers/footers removed, images extracted as separate files.
+const MD_OPTIONS = Object.freeze({ ocr: false, formulaOcr: false, removeHeaderFooter: true,
+  inlineImages: false, images: true });
+const MD_FILE_TYPES = new Set(['hwp', 'hwp3', 'hwpx', 'hwpml', 'pdf']);
+const IMAGE_EXTENSIONS = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/bmp': 'bmp',
+  'image/tiff': 'tif', 'image/webp': 'webp', 'image/wmf': 'wmf', 'image/emf': 'emf' };
+const PARSE_FAILURES = {
+  IMAGE_BASED_PDF: '글자층이 없는 스캔 PDF입니다. 이 기능은 OCR(문자 인식)을 하지 않습니다.',
+  DRM_PROTECTED: '문서보안(DRM)이 걸린 문서는 읽을 수 없습니다. 한글에서 보안을 해제한 사본으로 시도하세요.',
+  ENCRYPTED: '열기 암호가 있는 문서입니다. 한글에서 암호를 해제한 사본으로 시도하세요.',
+  CORRUPTED: '문서가 손상되어 읽을 수 없습니다.',
+  UNSUPPORTED_FORMAT: '지원하지 않는 문서 형식입니다.',
+  MISSING_DEPENDENCY: '이 형식을 읽는 보조 구성요소가 설치되어 있지 않습니다. 설치 스크립트를 다시 실행하세요.',
+  ZIP_BOMB: '압축 해제 크기가 비정상적으로 커서 처리를 중단했습니다.',
+  DECOMPRESSION_BOMB: '압축 해제 크기가 비정상적으로 커서 처리를 중단했습니다.',
+  NO_SECTIONS: '문서에 본문 구역이 없습니다.',
+  EMPTY_INPUT: '빈 파일입니다.',
+};
+// Only this version passed the installation review (docs/kordoc-security-review.md).
+const REVIEWED_VERSION = '4.21.30';
 const API = {
   diagnose: [], parse: ['parse'], compare: ['parse', 'diffBlocks'],
   validate: ['validateHwpx'], fields: ['parse', 'extractFormSchema', 'extractClickHereFields'],
@@ -35,6 +56,7 @@ const API = {
   patch: ['patchHwpx', 'validateHwpx', 'parse', 'diffBlocks'],
   render: ['renderDocument'], profile: ['hwpxToProfile'],
   lint: ['parse', 'lintGongmunText', 'lintMuncheText'],
+  to_markdown: ['parse'],
 };
 let request = {};
 let version;
@@ -253,6 +275,79 @@ function safeSvg(svg) {
     .replace(/url\(\s*["']?(?!#|data:image\/)[^)]+\)/gi, 'none');
 }
 
+function stagingDirectory(value) {
+  // The caller (Python) owns creation, publication and cleanup: if this process is
+  // killed on timeout/cancel, nothing partial reaches the user's folder.
+  if (typeof value !== 'string' || !path.isAbsolute(value)) throw fail('INVALID_STAGING', '임시 작업 폴더가 올바르지 않습니다.');
+  const resolved = fs.realpathSync(value);
+  if (!fs.statSync(resolved).isDirectory() || !path.basename(resolved).startsWith('.to-md-') || fs.readdirSync(resolved).length) {
+    throw fail('INVALID_STAGING', '임시 작업 폴더가 올바르지 않습니다.');
+  }
+  return resolved;
+}
+
+function plainName(value, code) {
+  // One path segment chosen by the caller; never a path.
+  if (typeof value !== 'string' || !value || value !== path.basename(value) || /[\\/:*?"<>|\x00-\x1f]/.test(value)
+      || value === '.' || value === '..' || value.trim() !== value) {
+    throw fail(code, '출력 이름이 올바르지 않습니다.');
+  }
+  return value;
+}
+
+async function toMarkdown(api, file, args) {
+  const staging = stagingDirectory(args.staging_dir);
+  const imageDirName = plainName(args.image_dir_name, 'INVALID_OUTPUT_NAME');
+  const withImages = args.images !== false;
+  // Buffer input deliberately omits filePath, disabling DRM/COM fallbacks.
+  const parsed = await api.parse(file.bytes, { ...MD_OPTIONS, images: withImages });
+  if (!parsed.success) {
+    const code = parsed.code || 'PARSE_ERROR';
+    throw fail(code in PARSE_FAILURES ? code : 'PARSE_ERROR',
+      PARSE_FAILURES[code] || '문서 내용을 읽지 못했습니다. 손상·지원 형식을 확인하세요.');
+  }
+  if (!MD_FILE_TYPES.has(parsed.fileType)) throw fail('UNSUPPORTED_FORMAT', '한글(HWP·HWPX·HWPML)과 PDF 문서만 Markdown으로 변환합니다.');
+  if (parsed.isImageBased) throw fail('IMAGE_BASED_PDF', PARSE_FAILURES.IMAGE_BASED_PDF);
+  let markdown = String(parsed.markdown || '');
+  if (!markdown.trim()) throw fail('EMPTY_RESULT', '문서에서 옮길 본문을 찾지 못했습니다.');
+
+  // Container entry names come from the document; never use them as disk paths.
+  // Link targets are percent-encoded so names like '계획(안)' or '보고 - 2' keep a valid
+  // `](...)` link for Markdown readers and for this app's own Markdown importer.
+  const linkDir = imageDirName.replace(/[%\s()<>#[\]]/g, c => (c === '(' ? '%28' : c === ')' ? '%29' : encodeURIComponent(c)));
+  const written = [];
+  if (withImages) {
+    let index = 0;
+    for (const image of parsed.images || []) {
+      const extension = IMAGE_EXTENSIONS[String(image?.mimeType || '').toLowerCase()];
+      const original = typeof image?.filename === 'string' ? image.filename : '';
+      if (!extension || !original || !image.data?.length) continue;
+      const name = `image_${String(++index).padStart(3, '0')}.${extension}`;
+      if (!written.length) fs.mkdirSync(path.join(staging, imageDirName));
+      writeExclusive(path.join(staging, imageDirName, name), Buffer.from(image.data));
+      markdown = markdown.split(`](${original})`).join(`](${linkDir}/${name})`);
+      written.push({ name, mimeType: image.mimeType, byteLength: image.data.length, sha256: hash(Buffer.from(image.data)) });
+    }
+  }
+  const prefix = `](${linkDir}/`;
+  const dangling = [...markdown.matchAll(/!\[[^\]]*\]\(([^)]*)\)/g)]
+    .filter(([whole, target]) => !whole.includes(prefix) && !/^data:image\//i.test(target)).length;
+  const ocrPages = (parsed.pageQuality || []).filter(page => page?.needsOcr).map(page => page.page);
+  const body = Buffer.from(markdown, 'utf8');
+  writeExclusive(path.join(staging, 'document.md'), body);
+
+  const warnings = [...(parsed.warnings || [])];
+  if (dangling) warnings.push(withImages
+    ? `그림 ${dangling}개는 원본에서 꺼내지 못해 자리 표시만 남았습니다.`
+    : '그림은 저장하지 않고 자리 표시만 남겼습니다.');
+  if (ocrPages.length) warnings.push(`글자층이 없거나 깨진 쪽이 있어 해당 쪽 내용이 빠졌을 수 있습니다: ${ocrPages.join(', ')}쪽`);
+  const partial = partialWarnings(parsed.warnings) || (withImages && dangling > 0) || ocrPages.length > 0;
+  return envelope(partial ? 'partial' : 'success', { fileType: parsed.fileType,
+    pageCount: parsed.pageCount ?? null, markdownFile: 'document.md', markdownChars: markdown.length,
+    markdownSha256: hash(body), imageDir: written.length ? imageDirName : null, images: written,
+    danglingImages: dangling, ocrPages }, warnings);
+}
+
 async function run(api) {
   const action = request.action;
   const args = request.args || {};
@@ -268,6 +363,7 @@ async function run(api) {
     return envelope(partialWarnings(warnings) ? 'partial' : 'success', compareParsed(api, before, after), warnings);
   }
   const file = inputFile(args.path);
+  if (action === 'to_markdown') return toMarkdown(api, file, args);
   if (action === 'validate') {
     ensureHwpx(file);
     const data = await api.validateHwpx(file.bytes);
@@ -371,12 +467,19 @@ try {
   const pkg = JSON.parse(fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'));
   if (pkg.name !== 'kordoc') throw fail('INVALID_PACKAGE', 'kordoc 패키지 경로가 올바르지 않습니다.');
   version = pkg.version;
+  // Guards against an accidental upgrade via HWPX_KORDOC_HOME, not against tampering
+  // (whoever can edit package.json can edit the code too).
+  if (version !== REVIEWED_VERSION && process.env.HWPX_KORDOC_ALLOW_UNREVIEWED !== '1') {
+    throw fail('UNREVIEWED_VERSION', `보안 심사를 마친 kordoc ${REVIEWED_VERSION}이 아닙니다(설치본 ${version}). 설치 스크립트로 고정 버전을 설치하세요.`);
+  }
   const api = await import(pathToFileURL(path.join(packageDir, 'dist', 'index.js')).href);
   const result = JSON.stringify(serializable(await run(api)));
   if (Buffer.byteLength(result) > LIMIT) throw fail('OUTPUT_TOO_LARGE', '결과 크기 제한(32 MiB)을 초과했습니다.');
   process.stdout.write(result);
 } catch (error) {
-  const known = new Set(['LOCAL_ONLY', 'INVALID_PATH', 'INPUT_CHANGED', 'INPUT_TOO_LARGE', 'HWPX_REQUIRED', 'OUTPUT_REQUIRED', 'SOURCE_OVERWRITE', 'OUTPUT_FORMAT', 'OUTPUT_EXISTS', 'UNSUPPORTED_ACTION', 'UNSUPPORTED_API', 'INVALID_PAGE', 'PAGE_NOT_FOUND', 'INVALID_VALUES', 'PATCH_FAILED', 'SOURCE_CHANGED', 'NODE_VERSION', 'INVALID_PACKAGE', 'OUTPUT_TOO_LARGE']);
+  const known = new Set(['LOCAL_ONLY', 'INVALID_PATH', 'INPUT_CHANGED', 'INPUT_TOO_LARGE', 'HWPX_REQUIRED', 'OUTPUT_REQUIRED', 'SOURCE_OVERWRITE', 'OUTPUT_FORMAT', 'OUTPUT_EXISTS', 'UNSUPPORTED_ACTION', 'UNSUPPORTED_API', 'INVALID_PAGE', 'PAGE_NOT_FOUND', 'INVALID_VALUES', 'PATCH_FAILED', 'SOURCE_CHANGED', 'NODE_VERSION', 'INVALID_PACKAGE', 'OUTPUT_TOO_LARGE',
+    'UNREVIEWED_VERSION', 'INVALID_STAGING', 'INVALID_OUTPUT_NAME', 'EMPTY_RESULT', 'PARSE_ERROR',
+    ...Object.keys(PARSE_FAILURES)]);
   const code = typeof error.code === 'string' ? error.code : 'BRIDGE_ERROR';
   const message = known.has(code) ? error.message : ({ ENOENT: '입력 파일 또는 설치 구성 파일을 찾지 못했습니다.',
     EEXIST: '기존 파일을 덮어쓸 수 없습니다.', EACCES: '파일 접근 권한이 없습니다.',

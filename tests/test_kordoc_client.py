@@ -31,6 +31,20 @@ class ClientProtocolTests(unittest.TestCase):
         self.client = KordocClient(self.package, NODE, timeout=2)
         self.bridge = self.directory / "stub.mjs"
         self.client.bridge_path = self.bridge
+        # Synthetic packages report version "test"; the reviewed-version guard has its own test.
+        environment = patch.dict(os.environ, {"HWPX_KORDOC_ALLOW_UNREVIEWED": "1"})
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def test_bridge_refuses_unreviewed_package_version(self):
+        self.client.bridge_path = ROOT / "kordoc_bridge.mjs"
+        (self.package / "package.json").write_text('{"name":"kordoc","type":"module","version":"9.9.9"}', encoding="utf-8")
+        (self.package / "dist" / "index.js").write_text("export async function parse(){return {success:true,blocks:[],markdown:'x'};}", encoding="utf-8")
+        source = self.directory / "source.hwpx"
+        source.write_bytes(b"synthetic input")
+        with patch.dict(os.environ, {"HWPX_KORDOC_ALLOW_UNREVIEWED": ""}):
+            result = self.client.request("parse", path=source)
+        self.assertEqual(result["error"]["code"], "UNREVIEWED_VERSION", result)
 
     def stub(self, body):
         self.bridge.write_text("let s=''; for await (const c of process.stdin) s+=c; const req=JSON.parse(s);\n" + body, encoding="utf-8")

@@ -17,9 +17,11 @@ import uuid
 
 
 ACTIONS = frozenset({"diagnose", "parse", "compare", "validate", "fields",
-                     "fill", "patch", "render", "profile", "lint"})
+                     "fill", "patch", "render", "profile", "lint", "to_markdown"})
 MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 MAX_REQUEST_BYTES = 1024 * 1024
+_STDERR_TAIL_BYTES = 16 * 1024
+_OUT_OF_MEMORY_MARKERS = (b"JavaScript heap out of memory", b"Reached heap limit", b"Allocation failed")
 
 
 def _error(action: str, code: str, message: str, *, cancelled: bool = False) -> dict:
@@ -123,6 +125,8 @@ class KordocClient:
 
     def _exchange(self, process, payload, action, request_id, cancel_event):
         output = bytearray()
+        # Only a bounded tail of stderr is kept, to classify crashes; it is never logged.
+        errors = bytearray()
         oversized = threading.Event()
 
         def read(stream, collect):
@@ -135,6 +139,9 @@ class KordocClient:
                         break
                     if collect:
                         output.extend(chunk)
+                    else:
+                        errors.extend(chunk)
+                        del errors[:-_STDERR_TAIL_BYTES]
             finally:
                 stream.close()
 
@@ -171,6 +178,8 @@ class KordocClient:
         if oversized.is_set():
             return _error(action, "OUTPUT_TOO_LARGE", "결과 크기 제한(32 MiB)을 초과했습니다.")
         if process.returncode:
+            if any(marker in errors for marker in _OUT_OF_MEMORY_MARKERS):
+                return _error(action, "OUT_OF_MEMORY", "문서가 커서 작업 메모리 한도(512 MB)를 넘었습니다. 그림 없이 변환하거나 문서를 나눠 시도하세요.")
             return _error(action, "PROCESS_FAILED", "kordoc 작업 프로세스가 비정상 종료했습니다.")
         try:
             result = json.loads(output.decode("utf-8"))

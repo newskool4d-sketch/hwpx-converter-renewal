@@ -78,6 +78,10 @@ The optional **`저장 폴더 비우기(앱 관리 파일만)`** setting clears 
 
 Each conversion runs in a separate worker process. On cancellation or timeout, the app allows up to two seconds for graceful shutdown before ending its own worker and the Hancom process that worker started. Hancom windows that were already open, or that you opened yourself, are never terminated. If the worker's Hancom process cannot be identified it is left alone, and a remaining window may need attention.
 
+### HWP/HWPX/PDF → Markdown
+
+Open **`한글·PDF → Markdown`** to convert several HWP, HWPX, HWPML or text-layer PDF files to Markdown without Hancom. Images go to a `<name>_images` folder and existing files are never replaced. Scanned PDFs (no OCR), DRM-protected and password-protected documents are refused with a reason. Command line: `python document_cli.py to-md "source.hwp" --output-dir "out"`. Details: [docs/document-tools.md](docs/document-tools.md).
+
 ### Document tools
 
 Open **`문서 읽기 · 비교 · 수정`**, then use the relevant action:
