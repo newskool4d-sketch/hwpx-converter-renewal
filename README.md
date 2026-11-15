@@ -76,7 +76,11 @@ Select files, choose an output folder, and start conversion. Existing HWPX files
 
 The optional **`저장 폴더 비우기(앱 관리 파일만)`** setting clears only outputs recorded in the app's manifest. The converter refuses a non-empty folder if it contains unlisted files or lacks the required manifest.
 
-Each conversion runs in a separate worker process. On cancellation or timeout, the app allows up to two seconds for graceful shutdown before ending its own worker. It does not terminate all Hancom processes. If Hancom itself stops responding, a remaining window may need attention.
+Each conversion runs in a separate worker process. On cancellation or timeout, the app allows up to two seconds for graceful shutdown before ending its own worker and the Hancom process that worker started. Hancom windows that were already open, or that you opened yourself, are never terminated. If the worker's Hancom process cannot be identified it is left alone, and a remaining window may need attention.
+
+### HWP/HWPX/PDF → Markdown
+
+Open **`한글·PDF → Markdown`** to convert several HWP, HWPX, HWPML or text-layer PDF files to Markdown without Hancom. Images go to a `<name>_images` folder and existing files are never replaced. Scanned PDFs (no OCR), DRM-protected and password-protected documents are refused with a reason. Command line: `python document_cli.py to-md "source.hwp" --output-dir "out"`. Details: [docs/document-tools.md](docs/document-tools.md).
 
 ### Document tools
 
@@ -102,7 +106,7 @@ The `full` stack prefers `opendataloader-pdf` when Java 11+ is available. Otherw
 ### Limits and troubleshooting
 
 - The SVG preview can differ from Hancom's screen and printed output. Structure validation, content comparison, and actual Hancom inspection are separate checks.
-- The new document integration works offline. It does not download OCR models or web images, register MCP servers, run watch webhooks, or use Chromium PDF printing. OCR is not bundled; the existing separately configured OCR path remains available.
+- The new document integration is configured to run without network access (Node networking and child-process functions are disabled and offline environment variables are set). This is not an operating-system sandbox, so install only the reviewed, pinned package version. It does not download OCR models or web images, register MCP servers, run watch webhooks, or use Chromium PDF printing. OCR is not bundled; the existing separately configured OCR path remains available.
 - Equations, charts, images inside tables, nested tables, and some original formatting are not fully supported. Read the reported warnings. Hyperlink display text is retained, but clickable links and all emphasis formatting are not preserved.
 - If document tools cannot find Node.js or kordoc, keep `deps/kordoc` beside the EXE and run the tool's diagnostic. Custom locations can be supplied with `HWPX_NODE_PATH` and `HWPX_KORDOC_HOME`. Basic conversion remains available.
 - This release is not digitally signed. Use the official release assets and compare `Get-FileHash .\anyway_to_hwpx_gui.exe -Algorithm SHA256` with `SHA256SUMS.txt`.

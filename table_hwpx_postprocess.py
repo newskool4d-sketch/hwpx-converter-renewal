@@ -166,6 +166,27 @@ def _filter_spans_to_grid(
     return valid, dropped
 
 
+def _filter_spans_covering_text(
+    tbl: ET.Element, spans: dict[tuple[int, int], list[int]]
+) -> tuple[dict[tuple[int, int], list[int]], list[list[int]]]:
+    """피병합 자리에 글자가 있는 병합은 적용하지 않는다 — 좌표가 어긋난 병합이 본문을 지우지 못하게 함."""
+    filled: set[tuple[int, int]] = set()
+    for tc in tbl.findall(".//hp:tc", NS):
+        cell_addr = tc.find("hp:cellAddr", NS)
+        if cell_addr is None:
+            continue
+        if any((node.text or "").strip() for node in tc.iter(_hp_tag("t"))):
+            filled.add((_int_attr(cell_addr, "rowAddr", -1), _int_attr(cell_addr, "colAddr", -1)))
+    valid: dict[tuple[int, int], list[int]] = {}
+    dropped: list[list[int]] = []
+    for key, span in spans.items():
+        if _covered_addrs({key: span}) & filled:
+            dropped.append(span)
+        else:
+            valid[key] = span
+    return valid, dropped
+
+
 def _covered_addrs(spans: dict[tuple[int, int], list[int]]) -> set[tuple[int, int]]:
     covered: set[tuple[int, int]] = set()
     for (row, col), span in spans.items():
@@ -270,6 +291,11 @@ def apply_table_width_profiles(hwpx_path, table_layouts: Sequence[TableLayout | 
             spans, dropped_spans = _filter_spans_to_grid(spans, len(widths), len(row_heights))
             if dropped_spans:
                 notes.append(f"[경고] 격자 범위를 벗어난 병합 {len(dropped_spans)}건 무시")
+            spans, text_spans = _filter_spans_covering_text(tbl, spans)
+            if text_spans:
+                notes.append(
+                    f"[확인 필요] 표 {table_index + 1}: 병합 대상 칸에 내용이 있어 병합 {len(text_spans)}건을 적용하지 않았습니다. 원본 표와 대조하세요."
+                )
             cell_para_space = calc_table_cell_para_space(layout.header, layout.rows, widths)
             after_para_space = calc_table_after_para_space(layout.header, layout.rows, widths)
             changed = _ensure_table_cell_margin(tbl, calc_table_cell_margin(layout.header, layout.rows, widths)) or changed

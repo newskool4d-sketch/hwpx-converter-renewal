@@ -99,6 +99,10 @@ def build_ui(app) -> None:
         header, text="문서 읽기 · 비교 · 수정", style="Secondary.TButton", command=app.open_document_tools
     )
     app.tools_button.pack(side=tk.RIGHT, padx=(12, 0))
+    app.markdown_button = ttk.Button(
+        header, text="한글·PDF → Markdown", style="Secondary.TButton", command=app.open_markdown_export
+    )
+    app.markdown_button.pack(side=tk.RIGHT, padx=(12, 0))
     ttk.Label(header, text="HWPX 변환기", style="Title.TLabel").pack(anchor="w")
     ttk.Label(
         header,

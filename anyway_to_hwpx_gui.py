@@ -135,7 +135,7 @@ class ConverterApp(BaseTk):
         self.pdf_layout_radio.configure(state=pdf_state)
         self.pdf_editable_radio.configure(state=pdf_state)
         self.out_entry.configure(state=state)
-        for name in ("tools_button", "timeout_entry"):
+        for name in ("tools_button", "markdown_button", "timeout_entry"):
             control = self.__dict__.get(name)
             if control is not None:
                 control.configure(state=state)
@@ -152,6 +152,17 @@ class ConverterApp(BaseTk):
             self._workbench.lift()
             return
         self._workbench = DocumentWorkbench(self)
+
+    def open_markdown_export(self):
+        if self._is_busy():
+            return
+        from markdown_export_window import MarkdownExportWindow
+
+        window = self.__dict__.get("_markdown_window")
+        if window is not None and window.winfo_exists():
+            window.lift()
+            return
+        self._markdown_window = MarkdownExportWindow(self)
 
     def cancel_conversion(self):
         if self._is_busy():
@@ -172,11 +183,14 @@ class ConverterApp(BaseTk):
         self._launch_conversion(tuple(args))
 
     def _close_app(self):
-        workbench = self.__dict__.get("_workbench")
-        if workbench is not None and workbench.winfo_exists():
-            workbench.close()
-            if workbench.winfo_exists():
-                return
+        for name in ("_workbench", "_markdown_window"):
+            window = self.__dict__.get(name)
+            if window is not None and window.winfo_exists():
+                window.close()
+                if window.winfo_exists():
+                    # Still finishing a cancelled job; try again shortly.
+                    self.after(100, self._close_app)
+                    return
         if self._is_busy():
             self.cancel_conversion()
             self.after(100, self._close_app)

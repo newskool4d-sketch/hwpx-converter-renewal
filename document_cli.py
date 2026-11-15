@@ -62,9 +62,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser = _Parser(description=__doc__)
     _common_options(parser, defaults=True)
     commands = parser.add_subparsers(dest="command", required=True)
-    for action in ("diagnose", "parse", "compare", "validate", "fields", "profile", "lint", "fill", "patch", "render"):
-        command = commands.add_parser(action)
+    for action in ("diagnose", "parse", "compare", "validate", "fields", "profile", "lint", "fill", "patch", "render", "to-md"):
+        command = commands.add_parser(action, help="HWP·HWPX·PDF → Markdown(그림은 별도 폴더)" if action == "to-md" else None)
         _common_options(command, defaults=False)
+        if action == "to-md":
+            command.add_argument("source")
+            command.add_argument("--output-dir", help="저장 폴더 (기본: 원본과 같은 폴더)")
+            command.add_argument("--no-images", action="store_true", help="그림 파일을 저장하지 않음")
+            continue
         if action == "compare":
             command.add_argument("before")
             command.add_argument("after")
@@ -90,6 +95,8 @@ def _error(action: str | None, code: str, message: str, *, status: str = "error"
 def _request_options(args: argparse.Namespace) -> dict:
     if args.command == "diagnose":
         return {}
+    if args.command == "to-md":
+        return {"source": args.source, "output_dir": args.output_dir, "images": not args.no_images}
     if args.command == "compare":
         return {"before": args.before, "after": args.after}
     options = {"path": args.source}
@@ -140,7 +147,12 @@ def main(argv: list[str] | None = None, *, client=None, stdout: TextIO | None = 
                 from kordoc_client import KordocClient
 
                 client = KordocClient(package_dir=args.package_dir, node_path=args.node_path, timeout=args.timeout)
-            result = client.request(args.command, **options)
+            if args.command == "to-md":
+                from markdown_export import convert_to_markdown
+
+                result = convert_to_markdown(client=client, **options)
+            else:
+                result = client.request(args.command, **options)
             if not isinstance(result, dict) or result.get("status") not in EXIT_CODES:
                 result = _error(args.command, "invalid_response", "Document engine returned an invalid response")
         except KeyboardInterrupt:

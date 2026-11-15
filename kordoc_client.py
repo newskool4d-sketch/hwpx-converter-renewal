@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import threading
@@ -18,9 +17,11 @@ import uuid
 
 
 ACTIONS = frozenset({"diagnose", "parse", "compare", "validate", "fields",
-                     "fill", "patch", "render", "profile", "lint"})
+                     "fill", "patch", "render", "profile", "lint", "to_markdown"})
 MAX_OUTPUT_BYTES = 32 * 1024 * 1024
 MAX_REQUEST_BYTES = 1024 * 1024
+_STDERR_TAIL_BYTES = 16 * 1024
+_OUT_OF_MEMORY_MARKERS = (b"JavaScript heap out of memory", b"Reached heap limit", b"Allocation failed")
 
 
 def _error(action: str, code: str, message: str, *, cancelled: bool = False) -> dict:
@@ -33,6 +34,24 @@ def _package_at(path: Path) -> Path | None:
     for candidate in (path, path / "node_modules" / "kordoc"):
         if (candidate / "package.json").is_file() and (candidate / "dist" / "index.js").is_file():
             return candidate.resolve()
+    return None
+
+
+def _node_on_path() -> str | None:
+    """Find Node on PATH only.
+
+    shutil.which() on Windows also looks in the current folder first, so running
+    from a folder of received documents could start a planted node.exe.
+    """
+    names = ("node.exe",) if os.name == "nt" else ("node",)
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        entry = entry.strip().strip('"')
+        if not entry or not os.path.isabs(entry):  # '', '.', and relative entries mean the current folder
+            continue
+        for name in names:
+            candidate = Path(entry) / name
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
@@ -65,7 +84,7 @@ class KordocClient:
             path = Path(explicit).expanduser()
             return str(path.resolve()) if path.is_file() else None
         adjacent = Path(sys.executable).resolve().parent / "deps" / "node" / "node.exe"
-        return str(adjacent) if adjacent.is_file() else shutil.which("node")
+        return str(adjacent) if adjacent.is_file() else _node_on_path()
 
     def request(self, action: str, *, cancel_event=None, **kwargs: Any) -> dict:
         """Return {ok,status,action,data,warnings,error}; never raise for job errors."""
@@ -106,6 +125,8 @@ class KordocClient:
 
     def _exchange(self, process, payload, action, request_id, cancel_event):
         output = bytearray()
+        # Only a bounded tail of stderr is kept, to classify crashes; it is never logged.
+        errors = bytearray()
         oversized = threading.Event()
 
         def read(stream, collect):
@@ -118,6 +139,9 @@ class KordocClient:
                         break
                     if collect:
                         output.extend(chunk)
+                    else:
+                        errors.extend(chunk)
+                        del errors[:-_STDERR_TAIL_BYTES]
             finally:
                 stream.close()
 
@@ -154,6 +178,8 @@ class KordocClient:
         if oversized.is_set():
             return _error(action, "OUTPUT_TOO_LARGE", "결과 크기 제한(32 MiB)을 초과했습니다.")
         if process.returncode:
+            if any(marker in errors for marker in _OUT_OF_MEMORY_MARKERS):
+                return _error(action, "OUT_OF_MEMORY", "문서가 커서 작업 메모리 한도(512 MB)를 넘었습니다. 그림 없이 변환하거나 문서를 나눠 시도하세요.")
             return _error(action, "PROCESS_FAILED", "kordoc 작업 프로세스가 비정상 종료했습니다.")
         try:
             result = json.loads(output.decode("utf-8"))
